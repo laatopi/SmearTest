@@ -1,0 +1,209 @@
+---
+title: "Aerosol"
+output: html_notebook
+---
+
+Aerosol data test
+
+```{r}
+library("readxl")
+library(purrr)
+library('stringr')
+suppressPackageStartupMessages(library(tidyverse))
+options(tidyverse.quiet = TRUE)
+
+
+low <- read_excel("/home/laatopi/Documents/SmearTest/low_aerosol_dates.xlsx", col_names = FALSE)
+low <- low[-c(6)]
+colnames(low) <- c("Year", "Month", "Day", "Hour", "Minute")
+low$Time <- as.POSIXct(str_c(low$Year, "-", low$Month, "-", low$Day, " ", low$Hour, ":", low$Minute, ":00"), format="%Y-%m-%d %H:%M:%S", tz="UTC")
+low <- low[!names(low) %in% c("Minute","Second", "Hour", "Day", "Year", "Month")]
+head(low)
+
+
+high <- read_excel("/home/laatopi/Documents/SmearTest/high_aerosol_dates.xlsx", col_names = FALSE)
+high <- high[-c(6)]
+colnames(high) <- c("Year", "Month", "Day", "Hour", "Minute")
+high$Time <- as.POSIXct(str_c(high$Year, "-", high$Month, "-", high$Day, " ", high$Hour, ":", high$Minute, ":00"), format="%Y-%m-%d %H:%M:%S", tz="UTC")
+high <- high[!names(high) %in% c("Minute","Second", "Hour", "Day", "Year", "Month")]
+head(high)
+
+
+```
+
+```{r}
+#  lapply(function(x) {x$Month <- strtoi(sub("^0", "", x$Month));x}) %>%
+
+data_smear <- list.files(path = "/home/laatopi/Downloads/SMEAR2/", pattern = "*.csv", full.names = TRUE) %>% 
+  lapply(read_csv, show_col_types = FALSE) %>%
+  lapply(function(x) {x$Time <- as.POSIXct(str_c(x$Year, "-", x$Month, "-", x$Day, " ", x$Hour, ":", x$Minute, ":00"), format="%Y-%m-%d %H:%M:%S", tz="UTC");x}) %>%
+  lapply(function(x) x[!names(x) %in% c("Minute","Second", "Hour", "Day", "Year", "Month")]) %>%
+  reduce(cbind)                      # Full-join data sets into one data set 
+data_smear <- data_smear[unique(colnames(data_smear))]
+
+
+```
+
+```{r}
+low_points <- data_smear %>% right_join(low, by="Time")
+high_points <- data_smear %>% right_join(high, by="Time")
+
+df1 <- data.frame(number = high_points$HYY_EDDY233.NEE)
+df2 <- data.frame(number = low_points$HYY_EDDY233.NEE)
+df1$group <- 'High Actual'
+df2$group <- 'Low Actual'
+
+df <- rbind(df1, df2)
+
+m<-wilcox.test(df1$number,df2$number, correct=FALSE)
+
+library(ggplot2)
+ggplot(df, aes(x=group, y=number, group=group)) + 
+  geom_boxplot() +
+  annotate('text', label=paste('p =', m$p.value), x=.5, y=4)
+
+```
+
+```{r}
+colSums(is.na(low_points))
+print("-------------")
+colSums(is.na(high_points))
+
+print("+++++++++++++++++++++")
+nrow(na.omit(low_points))
+print("-------------")
+nrow(na.omit(high_points))
+
+print("+++++++++++++++++++++")
+nrow(na.omit(low_points[!names(low_points) %in% c("HYY_META.wsoil_B2")]))
+print("-------------")
+nrow(na.omit(high_points[!names(high_points) %in% c("HYY_META.wsoil_B2")]))
+
+low_points <- na.omit(low_points[!names(low_points) %in% c("HYY_META.wsoil_B2")])
+
+high_points <- na.omit(high_points[!names(high_points) %in% c("HYY_META.wsoil_B2")])
+
+l <- list(low_points, high_points)
+l <- lapply(l, function(x) {x$DiffuseFract <- x$HYY_META.diffPAR / x$HYY_META.PAR2; x}) %>%
+  lapply(function(x) {x$VaporPressureDeficit <- (611*exp((17.27*x$HYY_META.T336)/(237.3+x$HYY_META.T336)))-(611*exp((17.27*x$HYY_META.T336)/(237.3+x$HYY_META.T336)))*(x$HYY_META.RHTd/100) ;x})
+
+low_points <- l[[1]]
+high_points <- l[[2]]
+
+```
+- - - Testing the models - - - 
+```{r}
+library("iml")
+library("randomForest")
+library("e1071")
+library("caTools")
+library("caret")
+
+high_points <- within(high_points, rm(X))
+low_points  <- within(low_points, rm(X))
+
+write.csv(high_points, "/home/laatopi/Documents/SmearTest/low_points.csv")
+write.csv(low_points, "/home/laatopi/Documents/SmearTest/high_points.csv")
+
+high_rf <- randomForest(HYY_EDDY233.NEE ~ ., data = high_points, ntree = 500)
+low_rf  <-  randomForest(HYY_EDDY233.NEE ~ ., data = low_points, ntree = 500)
+
+#high_rf <- knnreg(HYY_EDDY233.NEE ~ ., data = high_points, ntree = 50)
+#low_rf <-  knnreg(HYY_EDDY233.NEE ~ ., data = low_points, ntree = 50)
+
+print("Errors, no data split - model tested and trained on the same data, so there may be overfitting.")
+print("Error on High Aerosol points")
+print(sqrt(mean((high_points$HYY_EDDY233.NEE - predict(high_rf, high_points))^2)))
+print("Error on Low Aerosol points")
+print(sqrt(mean((low_points$HYY_EDDY233.NEE - predict(low_rf, low_points))^2)))
+```
+```{r}
+h_mod <- Predictor$new(high_rf, data = high_points[-which(names(high_points) == "HYY_EDDY233.NEE")])
+
+l_mod <- Predictor$new(low_rf, data = low_points[-which(names(low_points) == "HYY_EDDY233.NEE")])
+```
+
+### Feature Interaction
+
+"Estimates the feature interactions in a prediction model.
+Interactions between features are measured via the decomposition of the prediction function: If a feature j has no interaction with any other feature, the prediction function can be expressed as the sum of the partial function that depends only on j and the partial function that only depends on features other than j. 
+
+If the variance of the full function is completely explained by the sum of the partial functions, there is no interaction between feature j and the other features. Any variance that is not explained can be attributed to the interaction and is used as a measure of interaction strength. 
+
+The interaction strength between two features is the proportion of the variance of the 2-dimensional partial dependence function that is not explained by the sum of the two 1-dimensional partial dependence functions."
+
+```{r}
+plot(Interaction$new(h_mod))
+plot(Interaction$new(l_mod))
+```
+### Feature Importance
+To compute the feature importance for a single feature, the model prediction loss (error) is measured before and after shuffling the values of the feature. By shuffling the feature values, the association between the outcome and the feature is destroyed. The larger the increase in prediction error, the more important the feature was. 
+
+The shuffling is repeated to get more accurate results, since the permutation feature importance tends to be quite unstable.
+
+```{r}
+h_mod <- Predictor$new(high_rf, data = high_points, y = "HYY_EDDY233.NEE")
+
+l_mod <- Predictor$new(low_rf, data = low_points, y = "HYY_EDDY233.NEE")
+imp <- FeatureImp$new(h_mod, loss = "mae")
+plot(imp)
+plot(FeatureImp$new(l_mod, loss = "mae"))
+```
+### ALE plots
+Accumulated local effects and partial dependence plots both show the average model prediction over the feature. The difference is that ALE are computed as accumulated differences over the conditional distribution and partial dependence plots over the marginal distribution. ALE plots preferable to PDPs, because they are faster and unbiased when features are correlated.
+
+```{r fig.align="center", echo = FALSE,fig.width = 20}
+plot(FeatureEffects$new(h_mod, method = "ale")) + scale_alpha_manual(values = 0.001)
+
+plot(FeatureEffects$new(l_mod, method = "ale")) + scale_alpha_manual(values = 0.001)
+```
+
+### ICE Plots
+
+Individual conditional expectation curves describe how, for a single observation, the prediction changes when the feature changes
+```{r fig.align="center", echo = FALSE,fig.width = 20}
+plot(FeatureEffects$new(h_mod, method = "ice")) + scale_alpha_manual(values = 0.001)
+
+plot(FeatureEffects$new(l_mod, method = "ice")) + scale_alpha_manual(values = 0.001)
+```
+
+
+
+
+```{r}
+library("ggplot2")
+data <- data_smear[!names(data_smear) %in% c("Time")]
+
+data_long <- data %>%                          # Apply pivot_longer function
+  pivot_longer(colnames(data)) %>% 
+  as.data.frame()
+head(data_long) 
+
+ggp1 <- ggplot(data_long, aes(x = value)) +    # Draw each column as histogram
+  geom_histogram() + 
+  facet_wrap(~ name, scales = "free")
+ggp1
+```
+
+```{r}
+p <- ggplot(data_smear, aes(y=HYY_META.T336, x=Time)) + geom_line() + xlab("")
+p
+p <- ggplot(data_smear, aes(y=HYY_EDDY233.u_star, x=Time)) + geom_line() + xlab("")
+p
+p <- ggplot(data_smear, aes(y=HYY_EDDY233.NEE, x=Time)) + geom_line() + xlab("")
+p
+p <- ggplot(data_smear, aes(y=HYY_META.PAR2, x=Time)) + geom_line() + xlab("")
+p
+p <- ggplot(data_smear, aes(y=HYY_META.diffPAR, x=Time)) + geom_line() + xlab("")
+p
+p <- ggplot(data_smear, aes(y=HYY_META.RHTd, x=Time)) + geom_line() + xlab("")
+p
+p <- ggplot(data_smear, aes(y=HYY_META.tsoil_A, x=Time)) + geom_line() + xlab("")
+p
+p <- ggplot(data_smear, aes(y=HYY_META.tsoil_B2, x=Time)) + geom_line() + xlab("")
+p
+p <- ggplot(data_smear, aes(y=HYY_META.wsoil_B2, x=Time)) + geom_line() + xlab("")
+p
+p <- ggplot(data_smear, aes(y=HYY_META.wsoil_30, x=Time)) + geom_line() + xlab("")
+p
+```

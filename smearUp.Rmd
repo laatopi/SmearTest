@@ -1,0 +1,206 @@
+---
+title: "SMEAR PoC"
+output:
+  html_notebook: default
+  pdf_document: default
+---
+
+Trying out the SMEAR 2 data:
+
+### Overview
+
+The data contains the following values:
+
+- NEP: The value we want to predict 
+  - Turbulence/stability-filtered, storage-corrected and gapfilled net ecosystem exchange of CO2, compilation of current primary flux measurements
+
+The features:
+
+- PPFD 
+  - Photosynthetically active radiation in wavelength range 400-700 nm at 18 m height (radiation tower 12/2009-2/2017) or 35 m height (35 m tower 2/2017-)
+- PPFDdiff
+  - Diffuse photosynthetically active radiation in wavelength range 400-700 nm at 18 m height (radiation tower 12/2009-2/2017) or 35 m height (35 m tower 2/2017-)
+- Relative Humidity
+  - Relative humidity at 16 m height (4/1998-1/2017) or 35 m height 
+- Air Temperature
+  - Air temperature at 33.6 m height measured with Pt100 inside ventilated custom-made radiation shield
+- Soil water content B2
+  - Volumetric soil water content in B2 horizon (26-36 cm depth in the mineral soil), mean of five locations
+- Soil temperature A
+  - Soil temperature in A horizon (2-5 cm depth in the mineral soil), mean of five locations
+- Soil temperature B2
+  - Soil temperature in B2 horizon (22-29 cm depth in the mineral soil), mean of five locations
+- Friction velocity (24 m)
+  - Friction velocity, mast / tall tower 24 m height, old primary flux measuring setup
+- Diffuse fraction
+  - PPFDdiff / PPFD
+- Vapor Pressure Deficit
+  - Calculated as follows:
+    - e_s = 611 * np.exp( (17.27 * df["AirTemp"]) / (237.3 + df["AirTemp"]) )
+    - e_a = e_s * (df["RelHum"]/100)
+    - VPD = e_s - e_a
+    
+#### Notes about the data
+
+- The data contains is only from months 7 and 8 (July and August)
+- Only rows where PPFD > 10 are kept.
+- Rows where any value is null are discarded.
+- Currently, no merging is done. Should probably be added?
+  - Meaning, that for some variables that are nearly identical, two different features would be merged into a single column. For example: Friction velocity 24 m and the after 2019 Friction velocity 27 m merged together to get more data.
+- Currently around 8245 data points after all of these are done.
+- The following plots are created using Random Forest model
+
+#
+#### What the data looks like
+
+```{r}
+library("iml")
+library("randomForest")
+library("e1071")
+library("caTools")
+
+r2_general <-function(preds,actual){ 
+  return(1- sum((preds - actual) ^ 2)/sum((actual - mean(actual))^2))
+}
+
+smear <- read.csv(file = '/home/laatopi/Documents/SmearTest/test_data.csv')
+smear <- within(smear, rm(X))
+head(smear)
+
+split = sample.split(smear$NEP, SplitRatio = 0.75)
+
+train = subset(smear, split == TRUE)
+test  = subset(smear, split == FALSE)
+
+rf <- randomForest(NEP ~ ., data = train, ntree = 50)
+sv <- svm(NEP ~ ., data = train,  kernel = "radial")
+
+summary(rf)
+
+```
+
+Spring data:
+```{r}
+smearS <- read.csv(file = '/home/laatopi/Documents/SmearTest/test_data_march_to_may.csv')
+smearS <- within(smearS, rm(X))
+head(smearS)
+
+split = sample.split(smearS$NEP, SplitRatio = 0.75)
+
+train = subset(smear, split == TRUE)
+test  = subset(smear, split == FALSE)
+
+rfS <- randomForest(NEP ~ ., data = train, ntree = 50)
+svS <- svm(NEP ~ ., data = train,  kernel = "radial")
+
+
+```
+
+
+### Feature Interaction
+
+"Estimates the feature interactions in a prediction model.
+Interactions between features are measured via the decomposition of the prediction function: If a feature j has no interaction with any other feature, the prediction function can be expressed as the sum of the partial function that depends only on j and the partial function that only depends on features other than j. 
+
+If the variance of the full function is completely explained by the sum of the partial functions, there is no interaction between feature j and the other features. Any variance that is not explained can be attributed to the interaction and is used as a measure of interaction strength. 
+
+The interaction strength between two features is the proportion of the variance of the 2-dimensional partial dependence function that is not explained by the sum of the two 1-dimensional partial dependence functions."
+
+
+
+```{r}
+X = smear[which(names(smear) != "NEP")]
+mod =  Predictor$new(rf, data = X, y = smear$NEP)
+mod2 = Predictor$new(sv, data = X, y = smear$NEP)
+
+ia <- Interaction$new(mod)
+ia2 <- Interaction$new(mod2)
+plot(ia)
+plot(ia2)
+
+ib <- Interaction$new(mod, feature = "PPFD")
+ib2 <- Interaction$new(mod2, feature = "PPFD")
+plot(ib)
+plot(ib2)
+```
+For Spring data:
+
+```{r}
+X = smearS[which(names(smearS) != "NEP")]
+modS =  Predictor$new(rf, data = X, y = smearS$NEP)
+modS2 = Predictor$new(sv, data = X, y = smearS$NEP)
+
+
+ia <- Interaction$new(modS)
+ia2 <- Interaction$new(modS2)
+plot(ia)
+plot(ia2)
+
+ib <- Interaction$new(modS, feature = "PPFD")
+ib2 <- Interaction$new(modS2, feature = "PPFD")
+plot(ib)
+plot(ib2)
+```
+
+### ALE Plots
+Accumulated local effects and partial dependence plots both show the average model prediction over the feature. ALE are computed as accumulated differences over the conditional distribution.
+
+```{r fig.align="center", echo = FALSE,fig.width = 20}
+eff <- FeatureEffects$new(mod)
+eff$plot()
+eff <- FeatureEffects$new(mod2)
+eff$plot()
+```
+
+For Spring data:
+
+```{r fig.align="center", echo = FALSE,fig.width = 20}
+eff <- FeatureEffects$new(modS)
+eff$plot()
+eff <- FeatureEffects$new(modS2)
+eff$plot()
+```
+### ICE Plots
+
+Individual conditional expectation curves describe how, for a single observation, the prediction changes when the feature changes
+```{r fig.align="center", echo = FALSE,fig.width = 20}
+eff <- FeatureEffects$new(mod, method = "ice")
+plot(eff) + scale_alpha_manual(values = 0.001)
+
+eff <- FeatureEffects$new(mod2, method = "ice")
+plot(eff) + scale_alpha_manual(values = 0.001)
+```
+
+For Spring data:
+
+```{r fig.align="center", echo = FALSE,fig.width = 20}
+eff <- FeatureEffects$new(modS, method = "ice")
+plot(eff) + scale_alpha_manual(values = 0.001)
+
+eff <- FeatureEffects$new(modS2, method = "ice")
+plot(eff) + scale_alpha_manual(values = 0.001)
+```
+
+### Feature Importance
+To compute the feature importance for a single feature, the model prediction loss (error) is measured before and after shuffling the values of the feature. By shuffling the feature values, the association between the outcome and the feature is destroyed. The larger the increase in prediction error, the more important the feature was. 
+
+The shuffling is repeated to get more accurate results, since the permutation feature importance tends to be quite unstable.
+
+```{r}
+imp <- FeatureImp$new(mod, loss = "mae")
+plot(imp)
+
+imp <- FeatureImp$new(mod2, loss = "mae")
+plot(imp)
+```
+
+For Spring data:
+
+```{r}
+imp <- FeatureImp$new(modS, loss = "mae")
+plot(imp)
+
+imp <- FeatureImp$new(modS2, loss = "mae")
+plot(imp)
+```
+Features associated with a model error increase by a factor of 1 (= no change) were not important for predicting y.

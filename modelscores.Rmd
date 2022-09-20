@@ -1,0 +1,466 @@
+---
+title: "Model Scores"
+output: html_notebook
+---
+
+👻👻👻 Boo! I am a ghost!! 👻👻👻 
+
+But I am harmless. 👻
+
+```{r}
+library(rsample)      # data splitting 
+library(randomForest) # basic implementation
+library(ranger)       # a faster implementation of randomForest
+library(caret)        # an aggregator package for performing many machine learnin
+library(h2o)          # an extremely fast java-based platform
+library(dplyr)
+library(magrittr)
+
+r2_general <-function(preds,actual){ 
+  return(1- sum((preds - actual) ^ 2)/sum((actual - mean(actual))^2))
+}
+
+smear <- read.csv(file = '/home/laatopi/Documents/SmearTest/test_data.csv')
+smear <- within(smear, rm(X, SoilWatCont))
+
+smear_split <- initial_split(smear, prop = .7)
+smear_train <- training(smear_split)
+smear_test  <- testing(smear_split)
+
+valid_split <- initial_split(smear_train, .8)
+smear_train_2 <- analysis(valid_split)
+
+smear_valid <- assessment(valid_split)
+x_test <- smear_valid[setdiff(names(smear_valid), "NEP")]
+y_test <- smear_valid$NEP
+
+```
+
+
+```{r}
+OOB_RMSE <- vector(mode = "numeric", length = 1)
+
+for(i in seq_along(OOB_RMSE)) {
+
+  optimal_ranger <- ranger(
+    formula         = NEP ~ ., 
+    data            = smear_train, 
+    num.trees       = 500,
+    mtry            = 3,
+    min.node.size   = 5,
+    sample.fraction = .8,
+    importance      = 'impurity'
+  )
+  
+  OOB_RMSE[i] <- (optimal_ranger$prediction.error)
+}
+
+hist(OOB_RMSE, breaks = 20)
+```
+Variable importance is measured by recording the decrease in MSE each time a variable is used as a node split in a tree. The remaining error left in predictive accuracy after a node split is known as node impurity and a variable that reduces this impurity is considered more important than those variables that do not. Consequently, we accumulate the reduction in MSE for each variable across all the trees and the variable with the greatest accumulated impact is considered the more important, or impactful.
+```{r}
+sqrt(optimal_ranger$variable.importance) %>% 
+  broom::tidy() %>%
+  dplyr::arrange(desc(x)) %>%
+  dplyr::top_n(10) %>%
+  ggplot(aes(reorder(names, x), x)) +
+  geom_col() +
+  coord_flip() +
+  ggtitle("Most important variables)")
+```
+
+```{r}
+h2o.no_progress()
+h2o.init(max_mem_size = "5g")
+h2o.removeAll()
+```
+
+```{r}
+y <- "NEP"
+x <- setdiff(names(smear_train), y)
+
+# turn training set into h2o object
+train.h2o <- as.h2o(smear_train)
+
+hyper_grid.h2o <- list(
+  ntrees      = seq(200, 500, by = 150),
+  mtries      = seq(1, 10, by = 1),
+  max_depth   = seq(20, 40, by = 5),
+  min_rows    = seq(1, 5, by = 2),
+  nbins       = seq(10, 30, by = 5),
+  sample_rate = c(.55, .632, .75)
+)
+
+# random grid search criteria
+search_criteria <- list(
+  strategy = "RandomDiscrete",
+  stopping_metric = "mse",
+  stopping_tolerance = 0.005,
+  stopping_rounds = 10,
+  max_runtime_secs = 25*60
+  )
+
+# build grid search 
+random_grid <- h2o.grid(
+  algorithm = "randomForest",
+  grid_id = "rf_grid2",
+  x = x, 
+  y = y, 
+  training_frame = train.h2o,
+  hyper_params = hyper_grid.h2o,
+  search_criteria = search_criteria
+  )
+
+# collect the results and sort by our model performance metric of choice
+grid_perf2 <- h2o.getGrid(
+  grid_id = "rf_grid2", 
+  sort_by = "mse", 
+  decreasing = FALSE
+  )
+print(grid_perf2)
+
+best_model_id <- grid_perf2@model_ids[[1]]
+best_model <- h2o.getModel(grid_perf2@model_ids[[1]])
+```
+
+
+```{r warning=FALSE}
+# Now let’s evaluate the model performance on a test set
+n = 30
+MSE  <- vector(mode = "numeric", length = n)
+RMSE <- vector(mode = "numeric", length = n)
+MAE  <- vector(mode = "numeric", length = n)
+R2   <- vector(mode = "numeric", length = n)
+R2_adjusted <- vector(mode = "numeric", length = n)
+
+cMSE  <- vector(mode = "numeric", length = n)
+cRMSE <- vector(mode = "numeric", length = n)
+
+basic_rf <- randomForest(
+  formula = NEP ~ .,
+  data    = smear_train
+)
+
+for(i in seq_along(MSE)) {
+  
+  smear_split <- initial_split(smear, prop = .5)
+  smear_test  <- testing(smear_split)
+  
+  smear_test.h2o <- as.h2o(smear_test)
+  best_model_perf <- h2o.performance(model = best_model, newdata = smear_test.h2o)
+  RMSE[i] <- h2o.rmse(best_model_perf)
+  MSE[i]  <- h2o.mse(best_model_perf)
+  pred_h2o <- as.data.frame(predict(best_model, smear_test.h2o))$predict
+  
+  cMSE[i] <- mean((smear_test$NEP - pred_h2o)^2)
+  cRMSE[i] <- sqrt(mean((smear_test$NEP - pred_h2o)^2))
+
+  MAE[i] <- sum(abs(smear_test$NEP - pred_h2o))/ length(smear_test$NEP)
+  R2[i] <- cor(smear_test$NEP, pred_h2o)^2
+  k = length(pred_h2o)
+  p =  10
+  R2_adjusted[i] <- 1 - (((1 - R2[i]) * (k - 1)) / (k - p - 1))
+  
+}
+```
+
+```{r}
+library(tidyr)
+library(ggplot2)
+l <- data.frame(MSE, RMSE, MAE, R2, R2_adjusted)
+
+ggplot(gather(l), aes(value)) + 
+    geom_histogram(bins = 10) + 
+    facet_wrap(~key, scales = 'free_x')
+```
+
+```{r}
+high_points <- read.csv(file = "/home/laatopi/Documents/SmearTest/high_points.csv", header = TRUE)[, -1]
+low_points  <- read.csv(file = "/home/laatopi/Documents/SmearTest/low_points.csv", header = TRUE)[, -1]
+```
+
+```{r}
+library(lubridate)
+names(high_points)[names(high_points) == 'HYY_EDDY233.u_star'] <- 'FricVel'
+names(high_points)[names(high_points) == 'HYY_META.T336'] <- 'AirTemp'
+names(high_points)[names(high_points) == 'HYY_META.tsoil_B2'] <- 'SoilTempB'
+names(high_points)[names(high_points) == 'HYY_META.tsoil_A'] <- 'SoilTempA'
+names(high_points)[names(high_points) == 'HYY_META.RHTd'] <- 'RelHum'
+names(high_points)[names(high_points) == 'HYY_META.PAR2'] <- 'PPFD'
+names(high_points)[names(high_points) == 'HYY_META.wsoil_B2'] <- 'SoilWatCont'
+names(high_points)[names(high_points) == 'HYY_META.diffPAR'] <- 'PPFDdiff'
+names(high_points)[names(high_points) == 'HYY_EDDY233.NEE'] <- 'NEP'
+
+names(low_points)[names(low_points) == 'HYY_EDDY233.u_star'] <- 'FricVel'
+names(low_points)[names(low_points) == 'HYY_META.T336'] <- 'AirTemp'
+names(low_points)[names(low_points) == 'HYY_META.tsoil_B2'] <- 'SoilTempB'
+names(low_points)[names(low_points) == 'HYY_META.tsoil_A'] <- 'SoilTempA'
+names(low_points)[names(low_points) == 'HYY_META.RHTd'] <- 'RelHum'
+names(low_points)[names(low_points) == 'HYY_META.PAR2'] <- 'PPFD'
+names(low_points)[names(low_points) == 'HYY_META.wsoil_B2'] <- 'SoilWatCont'
+names(low_points)[names(low_points) == 'HYY_META.diffPAR'] <- 'PPFDdiff'
+names(low_points)[names(low_points) == 'HYY_EDDY233.NEE'] <- 'NEP'
+
+high.h2o <- as.h2o(within(high_points, rm(Time)))
+pred_high <- as.data.frame(predict(best_model, high.h2o))$predict
+
+low.h2o <- as.h2o(within(low_points, rm(Time)))
+pred_low <- as.data.frame(predict(best_model, low.h2o))$predict
+
+df1 <- data.frame(number = pred_high, time = hour(high_points$Time))
+df2 <- data.frame(number = pred_low, time = hour(low_points$Time))
+
+df1$group <- 'High Prediction'
+df2$group <- 'Low Prediction'
+
+df <- rbind(df1, df2)
+
+df3 <- data.frame(number = high_points$NEP, time = hour(high_points$Time))
+df4 <- data.frame(number = low_points$NEP, time = hour(low_points$Time))
+df3$group <- 'High Actual'
+df4$group <- 'Low Actual'
+
+df5 <- rbind(df1, df2, df3, df4)
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+df2 <- data_summary(df5, varname="number", 
+                    groupnames=c("time", "group"))
+
+p <- ggplot(df2, aes(x=as.factor(time), y=number, group=group, color=group)) + 
+  geom_line(position = position_dodge(0.5)) +
+  geom_point(position = position_dodge(0.5))+
+  geom_errorbar(aes(ymin=number-sd, ymax=number+sd), width=.2,
+                 position=position_dodge(0.5))
+
+p + labs(title="Actual and Predicted NEE values for High and Low Aerosol", x = "Hour" , y = "NEE", color="Type")+
+   theme_classic() +
+   scale_color_manual(values=c('#FF3333','#FF9933', '#3352FF', '#33D1FF')) +
+   scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+   theme(panel.grid.major.y = element_line(color = "gray",
+                                        size = 0.5,
+                                        linetype = 2))
+```
+
+```{r warning=FALSE}
+library(iml)
+
+pred <- function(model, newdata)  {
+  results <- as.data.frame(h2o.predict(model, as.h2o(newdata)))
+  return(results[[3L]])
+}
+
+predictor_h <- Predictor$new(
+  model = best_model, 
+  data = high_points[which(names(high_points) != c("Time"))], 
+  y = "NEP", 
+  predict.fun = pred
+)
+
+eff <- FeatureEffects$new(predictor_h, method = "ale")
+eff$plot()
+
+predictor_l <- Predictor$new(
+  model = best_model, 
+  data = low_points[which(names(low_points) != c("Time"))], 
+  y = "NEP", 
+  predict.fun = pred
+)
+
+eff <- FeatureEffects$new(predictor_l, method = "ale")
+eff$plot()
+
+imp.h <- FeatureImp$new(predictor_h, loss = "mse", n.repetitions = 12)
+imp.l <- FeatureImp$new(predictor_l, loss = "mse", n.repetitions = 12)
+# plot output
+
+p1 <- plot(imp.h) + ggtitle("High")
+p2 <- plot(imp.l) + ggtitle("Low")
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+```
+The part with the partial models :D
+```{r}
+OOB_RMSE <- vector(mode = "numeric", length = 10)
+R2 <- vector(mode = "numeric", length = 10)
+R2_2 <- vector(mode = "numeric", length = 10)
+
+kerroshamppari <- data.frame(matrix(ncol=0, nrow=10))
+low_R2 <- data.frame(matrix(ncol=0, nrow=10))
+high_R2 <- data.frame(matrix(ncol=0, nrow=10))
+
+for(i in c(3, 2, 4:10)) {
+
+  var <- colnames(smear_train[, c(1, i)])[2]
+  
+  for(j in seq_along(OOB_RMSE)) {
+    smear_split <- initial_split(smear, prop = .7)
+    smear_train <- training(smear_split)
+    smear_test  <- testing(smear_split)
+    
+    optimal_ranger <- ranger(
+      formula         = NEP ~ .,
+      data            = smear_train[, c(1, i)],
+      num.trees       = 500,
+      mtry            = 1,
+      min.node.size   = 5,
+      sample.fraction = .8,
+      importance      = 'impurity'
+    )
+    
+    predictions <- predict(optimal_ranger, smear_test[var])
+    
+    reg_score <- cor(smear_test$NEP, predictions$predictions)^2
+    
+    predictions <- predict(optimal_ranger, low_points[var])
+  
+    l_score <- cor(low_points$NEP, predictions$predictions)^2
+    
+    predictions <- predict(optimal_ranger, high_points[var])
+    
+    h_score <- cor(high_points$NEP, predictions$predictions)^2
+    
+    OOB_RMSE[j] <- reg_score
+    R2[j] <- l_score
+    R2_2[j] <- h_score
+  }
+
+  kerroshamppari[var] <- OOB_RMSE
+  low_R2[var] <- R2
+  high_R2[var] <- R2_2
+}
+```
+
+Plotting
+
+-> -> ->
+  -> -> ->
+    -> -> ->
+  -> -> ->
+-> -> ->
+```{r}
+plot_for_all <- function() {
+  results <- sapply(kerroshamppari, function(x) c("SD" = sd(x), "Mean" = mean(x)))
+  results <- data.frame(t(results))
+  results <- tibble::rownames_to_column(results, "Var")
+  
+  p <- ggplot(results, aes(x=reorder(Var, Mean), y=Mean, fill=Var)) + 
+    geom_bar(stat="identity", color="black", 
+             position=position_dodge()) +
+    geom_errorbar(aes(ymin=Mean-SD, ymax=Mean+SD), width=.2,
+                   position=position_dodge(.9)) 
+  p + labs(title="Mean R2 of Random Forest trained with single Var, n=2528", x="Variable", y = "Mean RMSE")+
+     theme_classic() +
+     theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+     theme(legend.position = "none")
+}
+
+plot_for_all()
+```
+
+```{r}
+plot_for_lowNhigh <- function() {
+
+  results_low <- sapply(low_R2, function(x) c("SD" = sd(x), "Mean" = mean(x))) %>% 
+    t() %>% 
+    as.data.frame() %>% 
+    tibble::rownames_to_column("Var")
+  
+  results_high <- sapply(high_R2, function(x) c("SD" = sd(x), "Mean" = mean(x))) %>% 
+    t() %>% 
+    as.data.frame() %>% 
+    tibble::rownames_to_column("Var")
+  
+  p1 <- ggplot(results_low, aes(x=reorder(Var, Mean), y=Mean, fill=Var)) + 
+    geom_bar(stat="identity", color="black", 
+             position=position_dodge()) +
+    geom_errorbar(aes(ymin=Mean-SD, ymax=Mean+SD), width=.2,
+                   position=position_dodge(.9)) 
+  p1 <- p1 + labs(title="Mean R2 of Low, n=341", x="Variable", y = "Mean RMSE")+
+     theme_classic() +
+     theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+     theme(legend.position = "none")
+  
+  p2 <- ggplot(results_high, aes(x=reorder(Var, Mean), y=Mean, fill=Var)) + 
+    geom_bar(stat="identity", color="black", 
+             position=position_dodge()) +
+    geom_errorbar(aes(ymin=Mean-SD, ymax=Mean+SD), width=.2,
+                   position=position_dodge(.9)) 
+  p2 <- p2 + labs(title="Mean R2 of High, n=344", x="Variable", y = "Mean RMSE")+
+     theme_classic() +
+     theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+     theme(legend.position = "none")
+  
+  
+  gridExtra::grid.arrange(p1, p2, nrow = 1)
+}
+
+plot_for_lowNhigh()
+```
+
+
+```{r}
+OOB_RMSE <- vector(mode = "numeric", length = 10)
+R2 <- vector(mode = "numeric", length = 10)
+R2_2 <- vector(mode = "numeric", length = 10)
+
+kerroshamppari <- data.frame(matrix(ncol=0, nrow=10))
+low_R2 <- data.frame(matrix(ncol=0, nrow=10))
+high_R2 <- data.frame(matrix(ncol=0, nrow=10))
+for(i in c(2, 4:10)) {
+
+  var <- colnames(smear_train[, c(1, 3, i)])[3]
+  
+  for(j in seq_along(OOB_RMSE)) {
+    smear_split <- initial_split(smear, prop = .7)
+    smear_train <- training(smear_split)
+    smear_test  <- testing(smear_split)
+    
+    optimal_ranger <- ranger(
+      formula         = NEP ~ .,
+      data            = smear_train[, c(1, 3, i)],
+      num.trees       = 500,
+      mtry            = 2,
+      min.node.size   = 5,
+      sample.fraction = .8,
+      importance      = 'impurity'
+    )
+    
+    predictions <- predict(optimal_ranger, smear_test[c("PPFD",var)])
+    
+    reg_score <- cor(smear_test$NEP, predictions$predictions)^2
+    
+    predictions <- predict(optimal_ranger, low_points[c("PPFD",var)])
+  
+    l_score <- cor(low_points$NEP, predictions$predictions)^2
+    
+    predictions <- predict(optimal_ranger, high_points[c("PPFD",var)])
+    
+    h_score <- cor(high_points$NEP, predictions$predictions)^2
+    
+    OOB_RMSE[j] <- reg_score
+    R2[j] <- l_score
+    R2_2[j] <- h_score
+  }
+
+  kerroshamppari[var] <- OOB_RMSE
+  low_R2[var] <- R2
+  high_R2[var] <- R2_2
+}
+
+plot_for_all()
+plot_for_lowNhigh()
+```
+
+```{r}
+print("DONE!")
+```
