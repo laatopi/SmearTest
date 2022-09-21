@@ -37,37 +37,7 @@ y_test <- smear_valid$NEP
 ```
 
 
-```{r}
-OOB_RMSE <- vector(mode = "numeric", length = 1)
-
-for(i in seq_along(OOB_RMSE)) {
-
-  optimal_ranger <- ranger(
-    formula         = NEP ~ ., 
-    data            = smear_train, 
-    num.trees       = 500,
-    mtry            = 3,
-    min.node.size   = 5,
-    sample.fraction = .8,
-    importance      = 'impurity'
-  )
-  
-  OOB_RMSE[i] <- (optimal_ranger$prediction.error)
-}
-
-hist(OOB_RMSE, breaks = 20)
-```
 Variable importance is measured by recording the decrease in MSE each time a variable is used as a node split in a tree. The remaining error left in predictive accuracy after a node split is known as node impurity and a variable that reduces this impurity is considered more important than those variables that do not. Consequently, we accumulate the reduction in MSE for each variable across all the trees and the variable with the greatest accumulated impact is considered the more important, or impactful.
-```{r}
-sqrt(optimal_ranger$variable.importance) %>% 
-  broom::tidy() %>%
-  dplyr::arrange(desc(x)) %>%
-  dplyr::top_n(10) %>%
-  ggplot(aes(reorder(names, x), x)) +
-  geom_col() +
-  coord_flip() +
-  ggtitle("Most important variables)")
-```
 
 ```{r}
 h2o.no_progress()
@@ -75,6 +45,7 @@ h2o.init(max_mem_size = "5g")
 h2o.removeAll()
 ```
 
+Random Forest
 ```{r}
 y <- "NEP"
 x <- setdiff(names(smear_train), y)
@@ -123,6 +94,61 @@ best_model_id <- grid_perf2@model_ids[[1]]
 best_model <- h2o.getModel(grid_perf2@model_ids[[1]])
 ```
 
+```{r}
+hyper_params = list( 
+  max_depth = max_depth = seq(1,29,2),                                      
+  sample_rate = seq(0.2,1,0.01),                                             
+  col_sample_rate = seq(0.2,1,0.01),                                         
+  col_sample_rate_per_tree = seq(0.2,1,0.01),                                
+  col_sample_rate_change_per_level = seq(0.9,1.1,0.01),                      
+  min_rows = 2^seq(0,log2(nrow(train))-1,1),                                 
+  nbins = 2^seq(4,10,1),                                                     
+  nbins_cats = 2^seq(4,12,1),                                                
+  min_split_improvement = c(0,1e-8,1e-6,1e-4),                               
+  histogram_type = c("UniformAdaptive","QuantilesGlobal","RoundRobin")       
+)
+
+search_criteria = list(
+  strategy = "RandomDiscrete",      
+  max_runtime_secs = 3600,         
+  max_models = 100,                  
+  seed = 1234,                        
+  stopping_rounds = 5,                
+  stopping_metric = "AUC",
+  stopping_tolerance = 1e-3
+)
+
+grid <- h2o.grid(
+  hyper_params = hyper_params,
+  search_criteria = search_criteria,
+  algorithm = "gbm",
+  grid_id = "final_grid", 
+  x = predictors, 
+  y = response, 
+  training_frame = train, 
+  validation_frame = valid,
+  ntrees = 10000,                                                            
+  learn_rate = 0.05,                                                         
+  learn_rate_annealing = 0.99,                                               
+  max_runtime_secs = 1200,                                                
+  stopping_metric = "mse",
+  stopping_tolerance = 0.005,
+  stopping_rounds = 10,
+  score_tree_interval = 10,                                                
+  seed = 1234                                                         
+)
+
+grid_perf <- h2o.getGrid(
+  grid_id = "final_grid", 
+  sort_by = "mse", 
+  decreasing = FALSE
+  )
+
+print(grid_perf)
+
+best_model_id <- grid_perf@model_ids[[1]]
+best_model <- h2o.getModel(grid_perf@model_ids[[1]])
+```
 
 ```{r warning=FALSE}
 # Now let’s evaluate the model performance on a test set
