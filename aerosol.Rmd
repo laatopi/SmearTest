@@ -40,8 +40,6 @@ data_smear <- list.files(path = "/home/laatopi/Downloads/SMEAR2/", pattern = "*.
   lapply(function(x) x[!names(x) %in% c("Minute","Second", "Hour", "Day", "Year", "Month")]) %>%
   reduce(cbind)                      # Full-join data sets into one data set 
 data_smear <- data_smear[unique(colnames(data_smear))]
-
-
 ```
 
 ```{r}

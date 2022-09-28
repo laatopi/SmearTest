@@ -1,0 +1,61 @@
+---
+title: "Data Manipulation"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(dplyr)
+library(readr)
+library("readxl")
+library(purrr)
+library('stringr')
+
+x <- list.dirs(path = "/home/laatopi/Downloads/SMEAR2/Larger") %>%
+  lapply(function(x) {list.files(x, full.names = TRUE)}) %>%
+  .[-1] %>%
+  lapply(function(x) {lapply(x, read.csv) %>% bind_rows}) %>%
+  lapply(function(x) {x$Time <- as.POSIXct(str_c(x$Year, "-", x$Month, "-", x$Day, " ", x$Hour, ":", x$Minute, ":00"), format="%Y-%m-%d %H:%M:%S", tz="UTC");x}) %>%
+  lapply(function(x) filter(x, Month > 6 & Month < 9 & Year > 2007 & Year < 2012)) %>%
+  lapply(function(x) x[!names(x) %in% c("Minute","Second", "Hour", "Day", "Year", "Month")]) %>%
+  lapply(function(x) arrange(x, Time)) %>%
+  lapply(function(x){if(length(x$Time) > 464400) x[-c(1:4368),] else x}) %>%
+  reduce(cbind) %>%
+  .[unique(colnames(.))] 
+
+colSums(is.na(x))
+nrow(na.omit(x[!names(x) %in% c("HYY_META.wsoil_B2")]))
+
+# x <- na.omit(x[!names(x) %in% c("HYY_META.wsoil_B2")]) %>%
+#   filter(HYY_META.PAR2 > 10)
+```
+
+  M A G I C
+S E C T I O N
+
+- creation of PAR and diffuse PAR using secret techniques
+```{r}
+path1 <- "/home/laatopi/Downloads/SMEAR2/Larger/smeardata_magicPAR.csv"
+path2 <- "/home/laatopi/Downloads/SMEAR2/Larger/smeardata_magicDIFFUSEPAR.csv"
+
+par <- read.csv(path1)
+diffpar <- read.csv(path2)
+par$HYY_META.PAR2_magic <-par$HYY_META.Glob * 2.06
+par$HYY_META.diffPAR_magic <- diffpar$HYY_META.diffGLOB * 2.06
+par$Time <- as.POSIXct(str_c(par$Year, "-", par$Month, "-", par$Day, " ", par$Hour, ":", par$Minute, ":00"), format="%Y-%m-%d %H:%M:%S", tz="UTC")
+par <- par[!names(par) %in% c("Minute","Second", "Hour", "Day", "Year", "Month", "HYY_META.Glob")]
+
+x <- merge(x, par, by="Time", all.x = TRUE)
+x$HYY_META.PAR2 <- coalesce(x$HYY_META.PAR2, x$HYY_META.PAR2_magic)
+x$HYY_META.diffPAR <- coalesce(x$HYY_META.diffPAR, x$HYY_META.diffPAR_magic)
+x <- x[!names(x) %in% c("HYY_META.PAR2_magic", "HYY_META.diffPAR_magic")]
+```
+
+```{r}
+x <- na.omit(x[!names(x) %in% c("HYY_META.wsoil_B2")]) %>%
+   filter(HYY_META.PAR2 > 10)
+write.csv(x, "/home/laatopi/Documents/SmearTest/smear2008-11.csv")
+```
