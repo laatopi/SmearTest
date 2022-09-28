@@ -28,9 +28,6 @@ x <- list.dirs(path = "/home/laatopi/Downloads/SMEAR2/Larger") %>%
 
 colSums(is.na(x))
 nrow(na.omit(x[!names(x) %in% c("HYY_META.wsoil_B2")]))
-
-# x <- na.omit(x[!names(x) %in% c("HYY_META.wsoil_B2")]) %>%
-#   filter(HYY_META.PAR2 > 10)
 ```
 
   M A G I C
