@@ -15,208 +15,21 @@ library(caret)        # an aggregator package for performing many machine learni
 library(h2o)          # an extremely fast java-based platform
 library(dplyr)
 library(magrittr)
-
-r2_general <-function(preds,actual){ 
-  return(1- sum((preds - actual) ^ 2)/sum((actual - mean(actual))^2))
-}
-
-smear <- read.csv(file = '/home/laatopi/Documents/SmearTest/test_data.csv')
-smear <- within(smear, rm(X, SoilWatCont))
-
-smear <- read.csv(file = '/home/laatopi/Documents/SmearTest/smear2008-11.csv')
-
-names(smear)[names(smear) == 'HYY_EDDY233.u_star'] <- 'FricVel'
-names(smear)[names(smear) == 'HYY_META.T336'] <- 'AirTemp'
-names(smear)[names(smear) == 'HYY_META.tsoil_B2'] <- 'SoilTempB'
-names(smear)[names(smear) == 'HYY_META.tsoil_A'] <- 'SoilTempA'
-names(smear)[names(smear) == 'HYY_META.RHTd'] <- 'RelHum'
-names(smear)[names(smear) == 'HYY_META.PAR2'] <- 'PPFD'
-names(smear)[names(smear) == 'HYY_META.wsoil_B2'] <- 'SoilWatCont'
-names(smear)[names(smear) == 'HYY_META.diffPAR'] <- 'PPFDdiff'
-names(smear)[names(smear) == 'HYY_EDDY233.NEE'] <- 'NEP'
-
-smear_split <- initial_split(smear, prop = .7)
-smear_train <- training(smear_split)
-smear_test  <- testing(smear_split)
-
-valid_split <- initial_split(smear_train, .8)
-smear_train_2 <- analysis(valid_split)
-
-smear_valid <- assessment(valid_split)
-x_test <- smear_valid[setdiff(names(smear_valid), "NEP")]
-y_test <- smear_valid$NEP
-
-```
-
-
-Variable importance is measured by recording the decrease in MSE each time a variable is used as a node split in a tree. The remaining error left in predictive accuracy after a node split is known as node impurity and a variable that reduces this impurity is considered more important than those variables that do not. Consequently, we accumulate the reduction in MSE for each variable across all the trees and the variable with the greatest accumulated impact is considered the more important, or impactful.
-
-```{r}
-h2o.no_progress()
-h2o.init(max_mem_size = "5g")
-h2o.removeAll()
-```
-
-Random Forest
-```{r}
-y <- "NEP"
-x <- setdiff(names(smear_train), y)
-
-# turn training set into h2o object
-train.h2o <- as.h2o(smear_train)
-
-hyper_grid.h2o <- list(
-  ntrees      = seq(200, 500, by = 150),
-  mtries      = seq(1, 10, by = 1),
-  max_depth   = seq(20, 40, by = 5),
-  min_rows    = seq(1, 5, by = 2),
-  nbins       = seq(10, 30, by = 5),
-  sample_rate = c(.55, .632, .75)
-)
-
-# random grid search criteria
-search_criteria <- list(
-  strategy = "RandomDiscrete",
-  stopping_metric = "mse",
-  stopping_tolerance = 0.005,
-  stopping_rounds = 10,
-  max_runtime_secs = 25*60
-  )
-
-# # build grid search 
-# random_grid <- h2o.grid(
-#   algorithm = "randomForest",
-#   grid_id = "rf_grid2",
-#   x = x, 
-#   y = y, 
-#   training_frame = train.h2o,
-#   hyper_params = hyper_grid.h2o,
-#   search_criteria = search_criteria
-#   )
-# 
-# # collect the results and sort by our model performance metric of choice
-# grid_perf2 <- h2o.getGrid(
-#   grid_id = "rf_grid2", 
-#   sort_by = "mse", 
-#   decreasing = FALSE
-#   )
-# print(grid_perf2)
-# 
-# best_model_id <- grid_perf2@model_ids[[1]]
-# best_model <- h2o.getModel(grid_perf2@model_ids[[1]])
-```
-
-```{r}
-splits <- h2o.splitFrame(
-  data = as.h2o(smear), 
-  ratios = c(0.6,0.2),   ## only need to specify 2 fractions, the 3rd is implied
-  destination_frames = c("train.hex", "valid.hex", "test.hex")
-)
-train <- splits[[1]]
-valid <- splits[[2]]
-test  <- splits[[3]]
-
-hyper_params = list( 
-  max_depth = seq(1,29,2),                                      
-  sample_rate = seq(0.2,1,0.01),                                             
-  col_sample_rate = seq(0.2,1,0.01),                                         
-  col_sample_rate_per_tree = seq(0.2,1,0.01),                                
-  col_sample_rate_change_per_level = seq(0.9,1.1,0.01),                      
-  min_rows = 2^seq(0,log2(nrow(train))-1,1),                                 
-  nbins = 2^seq(4,10,1),                                                     
-  nbins_cats = 2^seq(4,12,1),                                                
-  min_split_improvement = c(0,1e-8,1e-6,1e-4),                               
-  histogram_type = c("UniformAdaptive","QuantilesGlobal","RoundRobin")       
-)
-
-search_criteria = list(
-  strategy = "RandomDiscrete",      
-  max_runtime_secs = 6*60,         
-  max_models = 100                  
-)
-
-grid <- h2o.grid(
-  hyper_params = hyper_params,
-  search_criteria = search_criteria,
-  algorithm = "gbm",
-  grid_id = "final_grid", 
-  x = x, 
-  y = y, 
-  training_frame = train, 
-  validation_frame = valid,
-  ntrees = 10000,                                                            
-  learn_rate = 0.05,                                                         
-  learn_rate_annealing = 0.99,                                               
-  max_runtime_secs = 1200,                                                
-  stopping_metric = "mse",
-  stopping_tolerance = 0.005,
-  stopping_rounds = 10,
-  score_tree_interval = 10
-)
-
-grid_perf <- h2o.getGrid(
-  grid_id = "final_grid", 
-  sort_by = "mse", 
-  decreasing = FALSE
-  )
-
-print(grid_perf)
-
-best_model_id <- grid_perf@model_ids[[1]]
-best_model <- h2o.getModel(grid_perf@model_ids[[1]])
-```
-
-```{r warning=FALSE}
-# Now let’s evaluate the model performance on a test set
-n = 30
-MSE  <- vector(mode = "numeric", length = n)
-RMSE <- vector(mode = "numeric", length = n)
-MAE  <- vector(mode = "numeric", length = n)
-R2   <- vector(mode = "numeric", length = n)
-R2_adjusted <- vector(mode = "numeric", length = n)
-
-cMSE  <- vector(mode = "numeric", length = n)
-cRMSE <- vector(mode = "numeric", length = n)
-
-for(i in seq_along(MSE)) {
-  
-  smear_split <- initial_split(smear, prop = .5)
-  smear_test  <- testing(smear_split)
-  
-  smear_test.h2o <- as.h2o(smear_test)
-  best_model_perf <- h2o.performance(model = best_model, newdata = smear_test.h2o)
-  RMSE[i] <- h2o.rmse(best_model_perf)
-  MSE[i]  <- h2o.mse(best_model_perf)
-  pred_h2o <- as.data.frame(predict(best_model, smear_test.h2o))$predict
-  
-  cMSE[i] <- mean((smear_test$NEP - pred_h2o)^2)
-  cRMSE[i] <- sqrt(mean((smear_test$NEP - pred_h2o)^2))
-
-  MAE[i] <- sum(abs(smear_test$NEP - pred_h2o))/ length(smear_test$NEP)
-  R2[i] <- cor(smear_test$NEP, pred_h2o)^2
-  k = length(pred_h2o)
-  p =  10
-  R2_adjusted[i] <- 1 - (((1 - R2[i]) * (k - 1)) / (k - p - 1))
-}
-```
-
-```{r}
+library(iml)
 library(tidyr)
 library(ggplot2)
-l <- data.frame(MSE, RMSE, MAE, R2, R2_adjusted)
+library(lubridate)
+library(grid)
+library(gridExtra)
+library(cowplot)
 
-ggplot(gather(l), aes(value)) + 
-    geom_histogram(bins = 10) + 
-    facet_wrap(~key, scales = 'free_x')
-```
 
-```{r}
+smear_2012_2019 <- within(read.csv(file = '/home/laatopi/Documents/SmearTest/test_data.csv'), rm(X, SoilWatCont))
+smear_2008_2011 <- within(read.csv(file = '/home/laatopi/Documents/SmearTest/smear2008-11.csv'), rm(X, Time))
+
 high_points <- read.csv(file = "/home/laatopi/Documents/SmearTest/high_points.csv", header = TRUE)[, -1]
 low_points  <- read.csv(file = "/home/laatopi/Documents/SmearTest/low_points.csv", header = TRUE)[, -1]
-```
 
-```{r}
-library(lubridate)
 names(high_points)[names(high_points) == 'HYY_EDDY233.u_star'] <- 'FricVel'
 names(high_points)[names(high_points) == 'HYY_META.T336'] <- 'AirTemp'
 names(high_points)[names(high_points) == 'HYY_META.tsoil_B2'] <- 'SoilTempB'
@@ -236,188 +49,290 @@ names(low_points)[names(low_points) == 'HYY_META.PAR2'] <- 'PPFD'
 names(low_points)[names(low_points) == 'HYY_META.wsoil_B2'] <- 'SoilWatCont'
 names(low_points)[names(low_points) == 'HYY_META.diffPAR'] <- 'PPFDdiff'
 names(low_points)[names(low_points) == 'HYY_EDDY233.NEE'] <- 'NEP'
+```
 
-high.h2o <- as.h2o(within(high_points, rm(Time)))
-pred_high <- as.data.frame(predict(best_model, high.h2o))$predict
 
-low.h2o <- as.h2o(within(low_points, rm(Time)))
-pred_low <- as.data.frame(predict(best_model, low.h2o))$predict
+Variable importance is measured by recording the decrease in MSE each time a variable is used as a node split in a tree. The remaining error left in predictive accuracy after a node split is known as node impurity and a variable that reduces this impurity is considered more important than those variables that do not. Consequently, we accumulate the reduction in MSE for each variable across all the trees and the variable with the greatest accumulated impact is considered the more important, or impactful.
 
-df1 <- data.frame(number = pred_high, time = hour(high_points$Time))
-df2 <- data.frame(number = pred_low, time = hour(low_points$Time))
+```{r}
+h2o.no_progress()
+h2o.init(max_mem_size = "8g")
+h2o.removeAll()
+```
 
-df1$group <- 'High Prediction'
-df2$group <- 'Low Prediction'
+Random Forest
+```{r}
+tune_random_forest <- function(data) {
+  
+  y <- "NEP"
+  x <- setdiff(names(data), y)
+  
+  # turn training set into h2o object
+  train.h2o <- as.h2o(data)
+  
+  splits <- h2o.splitFrame(
+    data = as.h2o(data), 
+    ratios = c(0.6,0.2),   ## only need to specify 2 fractions, the 3rd is implied
+    destination_frames = c("train.hex", "valid.hex", "test.hex")
+  )
+  
+  train <- splits[[1]]
+  valid <- splits[[2]]
+  test  <- splits[[3]]
+  
+  hyper_params <- list(
+    ntrees      = seq(200, 500, by = 150),
+    mtries      = seq(1, 10, by = 1),
+    max_depth   = seq(20, 40, by = 5),
+    min_rows    = seq(1, 5, by = 2),
+    nbins       = seq(10, 30, by = 5),
+    sample_rate = c(.55, .632, .75)
+  )
+  
+  # random grid search criteria
+  search_criteria <- list(
+    strategy = "RandomDiscrete",
+    stopping_metric = "mse",
+    stopping_tolerance = 0.005,
+    stopping_rounds = 10,
+    max_runtime_secs = 45*60,
+    max_models = 5                 
+    )
+  
+  # build grid search
+  grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "rf_grid2",
+    x = x, 
+    y = y, 
+    training_frame = train, 
+    validation_frame = valid,
+    hyper_params = hyper_params,
+    search_criteria = search_criteria
+    )
+  
+  # collect the results and sort by our model performance metric of choice
+  grid_perf <- h2o.getGrid(
+    grid_id = "rf_grid2",
+    sort_by = "mse",
+    decreasing = FALSE
+  )
 
-df <- rbind(df1, df2)
+  best_model_id <- grid_perf@model_ids[[1]]
+  best_model <- h2o.getModel(grid_perf@model_ids[[1]])
+  h2o.removeAll()
+  return(best_model)
+}
+```
 
-df3 <- data.frame(number = high_points$NEP, time = hour(high_points$Time))
-df4 <- data.frame(number = low_points$NEP, time = hour(low_points$Time))
-df3$group <- 'High Actual'
-df4$group <- 'Low Actual'
+GBM
+```{r}
+tune_gbm <- function(data) {
+  
+  y <- "NEP"
+  x <- setdiff(names(data), y)
+  
+  splits <- h2o.splitFrame(
+    data = as.h2o(data), 
+    ratios = c(0.6,0.2),   ## only need to specify 2 fractions, the 3rd is implied
+    destination_frames = c("train.hex", "valid.hex", "test.hex")
+  )
+  
+  train <- splits[[1]]
+  valid <- splits[[2]]
+  test  <- splits[[3]]
+  
+  hyper_params = list( 
+    max_depth                = seq(1,29,2),                                      
+    sample_rate              = seq(0.2, 1, 0.01),                                             
+    col_sample_rate          = seq(0.2, 1, 0.01),                                         
+    col_sample_rate_per_tree = seq(0.2, 1, 0.01),                                
+    col_sample_rate_change_per_level = seq(0.9, 1.1, 0.01),                      
+    min_rows = 2^seq(0,log2(nrow(train))-1,1),                                 
+    nbins = 2^seq(4, 10, 1),                                                     
+    nbins_cats = 2^seq(4, 12, 1),                                                
+    min_split_improvement = c(0,1e-8, 1e-6, 1e-4),
+    ntrees = seq(200, 1000, by = 150),                                                           
+    histogram_type = c("UniformAdaptive","QuantilesGlobal","RoundRobin")       
+  )
+  
+  search_criteria = list(
+    strategy = "RandomDiscrete",      
+    stopping_metric = "mse",
+    stopping_tolerance = 0.005,
+    stopping_rounds = 10,
+    max_runtime_secs = 20*60,         
+    max_models = 1                 
+  )
+  
+  grid <- h2o.grid(
+    algorithm = "gbm",
+    grid_id = "final_grid", 
+    x = x, 
+    y = y, 
+    training_frame = train, 
+    validation_frame = valid,
+    hyper_params = hyper_params,
+    search_criteria = search_criteria,
+    score_tree_interval = 10,
+    learn_rate = 0.05,                                                         
+    learn_rate_annealing = 0.99
+  )
+  
+  grid_perf <- h2o.getGrid(
+    grid_id = "final_grid", 
+    sort_by = "mse", 
+    decreasing = FALSE
+  )
+  
+  best_model_id <- grid_perf@model_ids[[1]]
+  best_model <- h2o.getModel(grid_perf@model_ids[[1]])
+  h2o.removeAll()
+  return(best_model)
+}
+```
 
-df5 <- rbind(df1, df2, df3, df4)
+```{r warning=FALSE}
+test_model_perf <- function(model, data, n) {
+  n = n
+  MSE  <- vector(mode = "numeric", length = n)
+  RMSE <- vector(mode = "numeric", length = n)
+  MAE  <- vector(mode = "numeric", length = n)
+  R2   <- vector(mode = "numeric", length = n)
+  R2_adjusted <- vector(mode = "numeric", length = n)
+  
+  cMSE  <- vector(mode = "numeric", length = n)
+  cRMSE <- vector(mode = "numeric", length = n)
+  
+  for(i in seq_along(MSE)) {
+    
+    split <- initial_split(data, prop = .5)
+    test  <- testing(smear_split)
+    
+    test.h2o <- as.h2o(test)
+    model_perf <- h2o.performance(model = model, newdata = test.h2o)
+    RMSE[i] <- h2o.rmse(model_perf)
+    MSE[i]  <- h2o.mse(model_perf)
+    
+    pred_h2o <- as.data.frame(predict(model, test.h2o))$predict
 
-data_summary <- function(data, varname, groupnames){
+    MAE[i] <- sum(abs(test$NEP - pred_h2o))/ length(test$NEP)
+    R2[i] <- cor(test$NEP, pred_h2o)^2
+    k = length(pred_h2o)
+    p = 9
+    R2_adjusted[i] <- 1 - (((1 - R2[i]) * (k - 1)) / (k - p - 1))
+  }
+  
+  l <- data.frame(MSE, RMSE, MAE, R2, R2_adjusted)
+
+  ggplot(gather(l), aes(value)) + 
+    geom_histogram(bins = 10) + 
+    facet_wrap(~key, scales = 'free_x')
+}
+```
+
+```{r}
+create_hilo_pred_frame <- function(model, high, low) {
+  
+  high.h2o <- as.h2o(within(high, rm(Time)))
+  pred_high <- as.data.frame(predict(model, high.h2o))$predict
+  
+  low.h2o <- as.h2o(within(low, rm(Time)))
+  pred_low <- as.data.frame(predict(model, low.h2o))$predict
+  
+  df1 <- data.frame(number = pred_high, time = hour(high$Time))
+  df2 <- data.frame(number = pred_low, time = hour(low$Time))
+  
+  df1$group <- 'High Prediction'
+  df2$group <- 'Low Prediction'
+  
+  df <- rbind(df1, df2)
+  
+  df3 <- data.frame(number = high$NEP, time = hour(high$Time))
+  df4 <- data.frame(number = low$NEP, time = hour(low$Time))
+  df3$group <- 'High Actual'
+  df4$group <- 'Low Actual'
+  
+  df5 <- rbind(df1, df2, df3, df4)
+  
+  varname <- "number"
+  groupnames <- c("time", "group")
+  
   require(plyr)
+  
   summary_func <- function(x, col){
     c(mean = mean(x[[col]], na.rm=TRUE),
       sd = sd(x[[col]], na.rm=TRUE))
   }
-  data_sum<-ddply(data, groupnames, .fun=summary_func,
-                  varname)
+  
+  data_sum <- ddply(df5, groupnames, .fun=summary_func, varname)
   data_sum <- rename(data_sum, c("mean" = varname))
- return(data_sum)
+  return(data_sum)
 }
 
-df2 <- data_summary(df5, varname="number", 
-                    groupnames=c("time", "group"))
 
-p <- ggplot(df2, aes(x=as.factor(time), y=number, group=group, color=group)) + 
-  geom_line(position = position_dodge(0.5)) +
-  geom_point(position = position_dodge(0.5))+
-  geom_errorbar(aes(ymin=number-sd, ymax=number+sd), width=.2,
-                 position=position_dodge(0.5))
+plot_hi_lo <- function(df2, title_text) {
 
-p + labs(title="Actual and Predicted NEE values for High and Low Aerosol", x = "Hour" , y = "NEE", color="Type")+
-   theme_classic() +
-   scale_color_manual(values=c('#FF3333','#FF9933', '#3352FF', '#33D1FF')) +
-   scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
-   theme(panel.grid.major.y = element_line(color = "gray",
-                                        size = 0.5,
-                                        linetype = 2))
+  p <- ggplot(df2, aes(x=as.factor(time), y=number, group=group, color=group)) + 
+    geom_line(position = position_dodge(0.5)) +
+    geom_point(position = position_dodge(0.5))+
+    geom_errorbar(aes(ymin=number-sd, ymax=number+sd), width=.2,
+                   position=position_dodge(0.5))
+  
+  p <- p + labs(title = title_text, x = "Hour" , y = "NEE", color="Type")+
+     theme_classic() +
+     scale_color_manual(values=c('#FF3333','#FF9933', '#3352FF', '#33D1FF')) +
+     scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+     theme(panel.grid.major.y = element_line(color = "gray",
+                                          size = 0.5,
+                                          linetype = 2))
+  return(p)
+}
 ```
 
 ```{r warning=FALSE}
-library(iml)
-
 pred <- function(model, newdata)  {
   results <- as.data.frame(h2o.predict(model, as.h2o(newdata)))
-  return(results[[3L]])
+  return(results[[3L]])}
+
+predict_feature_effects <- function(model) {
+
+  predictor_h <- Predictor$new(
+    model = model, 
+    data = high_points[which(names(high_points) != c("Time"))], 
+    y = "NEP", 
+    predict.fun = pred
+  )
+  
+  eff <- FeatureEffects$new(predictor_h, method = "ale")
+  eff$plot()
+  
+  predictor_l <- Predictor$new(
+    model = model, 
+    data = low_points[which(names(low_points) != c("Time"))], 
+    y = "NEP", 
+    predict.fun = pred
+  )
+  
+  eff <- FeatureEffects$new(predictor_l, method = "ale")
+  eff$plot()
+  
+  imp.h <- FeatureImp$new(predictor_h, loss = "mse", n.repetitions = 12)
+  imp.l <- FeatureImp$new(predictor_l, loss = "mse", n.repetitions = 12)
+  # plot output
+  
+  p1 <- plot(imp.h) + ggtitle("High")
+  p2 <- plot(imp.l) + ggtitle("Low")
+  
+  return(gridExtra::grid.arrange(p1, p2, nrow = 1))
 }
-
-predictor_h <- Predictor$new(
-  model = best_model, 
-  data = high_points[which(names(high_points) != c("Time"))], 
-  y = "NEP", 
-  predict.fun = pred
-)
-
-eff <- FeatureEffects$new(predictor_h, method = "ale")
-eff$plot()
-
-predictor_l <- Predictor$new(
-  model = best_model, 
-  data = low_points[which(names(low_points) != c("Time"))], 
-  y = "NEP", 
-  predict.fun = pred
-)
-
-eff <- FeatureEffects$new(predictor_l, method = "ale")
-eff$plot()
-
-imp.h <- FeatureImp$new(predictor_h, loss = "mse", n.repetitions = 12)
-imp.l <- FeatureImp$new(predictor_l, loss = "mse", n.repetitions = 12)
-# plot output
-
-p1 <- plot(imp.h) + ggtitle("High")
-p2 <- plot(imp.l) + ggtitle("Low")
-gridExtra::grid.arrange(p1, p2, nrow = 1)
 ```
 The part with the partial models :D
+
+
 ```{r}
-OOB_RMSE <- vector(mode = "numeric", length = 10)
-R2 <- vector(mode = "numeric", length = 10)
-R2_2 <- vector(mode = "numeric", length = 10)
-
-kerroshamppari <- data.frame(matrix(ncol=0, nrow=10))
-low_R2 <- data.frame(matrix(ncol=0, nrow=10))
-high_R2 <- data.frame(matrix(ncol=0, nrow=10))
-
-for(i in c(3, 2, 4:10)) {
-
-  var <- colnames(smear_train[, c(1, i)])[2]
-  k <- 1
-
-  for(j in seq_along(OOB_RMSE)) {
-    
-    splits <- h2o.splitFrame(
-      data = as.h2o(smear[c("NEP", var)]), 
-      ratios = c(0.6,0.2),
-      destination_frames = c("train.hex", "valid.hex", "test.hex")
-    )
-    
-    train <- splits[[1]]
-    valid <- splits[[2]]
-    test  <- splits[[3]]    
-      
-    # gbm <- h2o.gbm(
-    #   x = var, 
-    #   y = y, 
-    #   training_frame = train, 
-    #   validation_frame = valid,
-    # 
-    #   ntrees = 10000,                                                           
-    #   learn_rate = 0.01,                                                         
-    #   stopping_rounds = 10, stopping_tolerance = 0.005, stopping_metric = "mse", 
-    #   
-    #   sample_rate = 0.8,                                                       
-    #   col_sample_rate = 0.8,                                                   
-    #   seed = 1234,                                                             
-    #   
-    #   score_tree_interval = 10                                                 
-    # )
-    # 
-    gbm <- do.call(h2o.gbm,
-        {
-          p <- best_model@parameters
-          p$model_id = NULL          ## do not overwrite the original grid model
-          p$training_frame = train      ## use the full dataset
-          p$validation_frame = NULL  ## no validation frame
-          p$nfolds = 5               ## cross-validation
-          p$x = var
-          p$y = y
-          p
-        }
-    )
-    
-    curr_model <- gbm
-    k <- k + 1
-    
-    predictions <- as.data.frame(predict(curr_model, as.h2o(smear_test[var])))$predict
-    
-    reg_score <- cor(smear_test$NEP, predictions)^2
-    
-    predictions <- as.data.frame(predict(curr_model, as.h2o(low_points[var])))$predict
-
-    l_score <- cor(low_points$NEP, predictions)^2
-    
-    predictions <- as.data.frame(predict(curr_model, as.h2o(high_points[var])))$predict
-    
-    h_score <- cor(high_points$NEP, predictions)^2
-    
-    OOB_RMSE[j] <- reg_score
-    R2[j] <- l_score
-    R2_2[j] <- h_score
-  }
-
-  kerroshamppari[var] <- OOB_RMSE
-  low_R2[var] <- R2
-  high_R2[var] <- R2_2
-  
-}
-```
-
-Plotting
-
--> -> ->
-  -> -> ->
-    -> -> ->
-  -> -> ->
--> -> ->
-```{r}
-plot_for_all <- function() {
-  results <- sapply(kerroshamppari, function(x) c("SD" = sd(x), "Mean" = mean(x)))
+plot_for_all <- function(all_R2) {
+  results <- sapply(all_R2, function(x) c("SD" = sd(x), "Mean" = mean(x)))
   results <- data.frame(t(results))
   results <- tibble::rownames_to_column(results, "Var")
   
@@ -431,12 +346,10 @@ plot_for_all <- function() {
      theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
      theme(legend.position = "none")
 }
-
-plot_for_all()
 ```
 
 ```{r}
-plot_for_lowNhigh <- function() {
+plot_for_lowNhigh <- function(low_R2, high_R2, title) {
 
   results_low <- sapply(low_R2, function(x) c("SD" = sd(x), "Mean" = mean(x))) %>% 
     t() %>% 
@@ -453,97 +366,246 @@ plot_for_lowNhigh <- function() {
              position=position_dodge()) +
     geom_errorbar(aes(ymin=Mean-SD, ymax=Mean+SD), width=.2,
                    position=position_dodge(.9)) 
-  p1 <- p1 + labs(title="Mean R2 of Low, n=341", x="Variable", y = "Mean RMSE")+
+  p1 <- p1 + labs(title="Mean R2 of Low", x="Variable", y = "Mean RMSE")+
      theme_classic() +
      theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-     theme(legend.position = "none")
+     theme(legend.position = "none") + 
+     theme(panel.grid.major = element_line(colour = "gray", size = (0.2)), panel.grid.minor = element_line(size = (0.2), colour ="grey")) +
+     ylim(0, 1)
   
   p2 <- ggplot(results_high, aes(x=reorder(Var, Mean), y=Mean, fill=Var)) + 
     geom_bar(stat="identity", color="black", 
              position=position_dodge()) +
     geom_errorbar(aes(ymin=Mean-SD, ymax=Mean+SD), width=.2,
                    position=position_dodge(.9)) 
-  p2 <- p2 + labs(title="Mean R2 of High, n=344", x="Variable", y = "Mean RMSE")+
+  p2 <- p2 + labs(title="Mean R2 of High", x="Variable", y = "Mean RMSE")+
      theme_classic() +
      theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-     theme(legend.position = "none")
+     theme(legend.position = "none") +
+     theme(panel.grid.major = element_line(colour = "gray", size = (0.2)), panel.grid.minor = element_line(size = (0.2), colour ="grey")) +
+     ylim(0, 1)
   
-  
-  gridExtra::grid.arrange(p1, p2, nrow = 1)
+  return(grid.arrange(p1, p2, nrow = 1, top = textGrob(title, gp=gpar(fontsize=12,font=3))))
 }
+```
 
-plot_for_lowNhigh()
+```{r}
+# OOB_RMSE <- vector(mode = "numeric", length = 10)
+# R2 <- vector(mode = "numeric", length = 10)
+# R2_2 <- vector(mode = "numeric", length = 10)
+# 
+# all_R2 <- data.frame(matrix(ncol=0, nrow=10))
+# low_R2 <- data.frame(matrix(ncol=0, nrow=10))
+# high_R2 <- data.frame(matrix(ncol=0, nrow=10))
+# 
+# for(i in c(1:2, 4:10)) {
+# 
+#   var <- colnames(smear[, c(3, i)])[2]
+#   k <- 1
+# 
+#   for(j in seq_along(OOB_RMSE)) {
+#     
+#     splits <- h2o.splitFrame(
+#       data = as.h2o(smear[c("NEP", var)]), 
+#       ratios = c(0.6,0.2),
+#       destination_frames = c("train.hex", "valid.hex", "test.hex")
+#     )
+#     
+#     train <- splits[[1]]
+#     valid <- splits[[2]]
+#     test  <- splits[[3]]    
+#       
+# 
+#     curr_model <- do.call(h2o.gbm,
+#         {
+#           p <- best_model@parameters
+#           p$model_id = NULL          ## do not overwrite the original grid model
+#           p$training_frame = train      ## use the full dataset
+#           p$validation_frame = NULL  ## no validation frame
+#           p$nfolds = 5               ## cross-validation
+#           p$x = var
+#           p$y = y
+#           p
+#         }
+#     )
+#     
+#     curr_model <- gbm
+#     k <- k + 1
+#     
+#     predicted_y <- as.data.frame(predict(curr_model, as.h2o(smear_test[var])))$predict
+#     reg_score <- cor(smear_test$NEP, predicted_y)^2
+#     
+#     predicted_y <- as.data.frame(predict(curr_model, as.h2o(low_points[var])))$predict
+#     l_score <- cor(low_points$NEP, predicted_y)^2
+#     
+#     predicted_y <- as.data.frame(predict(curr_model, as.h2o(high_points[var])))$predict
+#     h_score <- cor(high_points$NEP, predicted_y)^2
+#     
+#     OOB_RMSE[j] <- reg_score
+#     R2[j] <- l_score
+#     R2_2[j] <- h_score
+#   }
+# 
+#   all_R2[var] <- OOB_RMSE
+#   low_R2[var] <- R2
+#   high_R2[var] <- R2_2
+# }
 ```
 
 
 ```{r}
-OOB_RMSE <- vector(mode = "numeric", length = 10)
-R2 <- vector(mode = "numeric", length = 10)
-R2_2 <- vector(mode = "numeric", length = 10)
+train_with_two <- function(data, model1, model2, n) {
 
-kerroshamppari <- data.frame(matrix(ncol=0, nrow=10))
-low_R2 <- data.frame(matrix(ncol=0, nrow=10))
-high_R2 <- data.frame(matrix(ncol=0, nrow=10))
-for(i in c(2, 4:10)) {
-
-  var <- colnames(smear_train[, c(1, 3, i)])[3]
+  gbm_R2_all  <- vector(mode = "numeric", length = n)
+  gbm_R2_l    <- vector(mode = "numeric", length = n)
+  gbm_R2_h    <- vector(mode = "numeric", length = n)
   
-  k <- 1
+  gbm_all_R2  <- data.frame(matrix(ncol=0, nrow = n))
+  gbm_low_R2  <- data.frame(matrix(ncol=0, nrow = n))
+  gbm_high_R2 <- data.frame(matrix(ncol=0, nrow = n))
   
-  for(j in seq_along(OOB_RMSE)) {
-
-    splits <- h2o.splitFrame(
-      data = as.h2o(smear[c("NEP", "PPFD", var)]), 
-      ratios = c(0.6,0.2),
-      destination_frames = c("train.hex", "valid.hex", "test.hex")
-    )
+  rf_R2_all   <- vector(mode = "numeric", length = n)
+  rf_R2_l     <- vector(mode = "numeric", length = n)
+  rf_R2_h     <- vector(mode = "numeric", length = n)
+  
+  rf_all_R2   <- data.frame(matrix(ncol=0, nrow = n))
+  rf_low_R2   <- data.frame(matrix(ncol=0, nrow = n))
+  rf_high_R2  <- data.frame(matrix(ncol=0, nrow = n))
     
-    train <- splits[[1]]
-    valid <- splits[[2]]
-    test  <- splits[[3]]    
+  varnames <- c("AirTemp", "FricVel", "PPFDdiff", "RelHum", "SoilTempA", "SoilTempB", "DiffuseFract", "VaporPressureDeficit")
+
+  for(var in varnames) {
+    print(var)
+    for(j in seq_along(gbm_R2_all)) {
+  
+      splits <- h2o.splitFrame(
+        data = as.h2o(data[c("NEP", "PPFD", var)]), 
+        ratios = c(0.6,0.2),
+        destination_frames = c("train.hex", "valid.hex", "test.hex")
+      )
       
-    gbm <- do.call(h2o.gbm,
-        {
-          p <- best_model@parameters
-          p$model_id = NULL          ## do not overwrite the original grid model
-          p$training_frame = train      ## use the full dataset
-          p$validation_frame = NULL  ## no validation frame
-          p$nfolds = 5               ## cross-validation
-          p$x = c(var, "PPFD")
-          p$y = y
-          p
-        }
-    )
+      train <- splits[[1]]
+      valid <- splits[[2]]
+      test  <- splits[[3]]
+      
+      gbm <- do.call(h2o.gbm, {
+        p <- model1@parameters
+        p$model_id = NULL          ## do not overwrite the original grid model
+        p$training_frame = train      ## use the full dataset
+        p$validation_frame = NULL  ## no validation frame
+        p$nfolds = 5               ## cross-validation
+        p$x = c(var, "PPFD")
+        p$y = "NEP"
+        p
+      })
+      curr_model <- gbm
+      
+      predicted_y <- as.data.frame(predict(curr_model, test))$predict
+      reg_score <- cor(as.data.frame(test)$NEP, predicted_y)^2
+      
+      predicted_y <- as.data.frame(predict(curr_model, as.h2o(low_points[c("PPFD", var)])))$predict
+      l_score <- cor(low_points$NEP, predicted_y)^2
+      
+      predicted_y <- as.data.frame(predict(curr_model, as.h2o(high_points[c("PPFD", var)])))$predict
+      h_score <- cor(high_points$NEP, predicted_y)^2
+      
+      gbm_R2_all[j] <- reg_score
+      gbm_R2_l[j]   <- l_score
+      gbm_R2_h[j]   <- h_score
+      
+      rf <- do.call(h2o.randomForest, {
+        p <- model2@parameters
+        p$model_id = NULL
+        p$training_frame = train      ## use the full dataset
+        p$validation_frame = NULL  ## no validation frame
+        p$nfolds = 5               ## cross-validation
+        p$x = c(var, "PPFD")
+        p$y = "NEP"
+        p$mtries = -1
+        p
+      })
+      
+      curr_model <- rf
+      
+      predicted_y <- as.data.frame(predict(curr_model, test))$predict
+      reg_score <- cor(as.data.frame(test)$NEP, predicted_y)^2
+      
+      predicted_y <- as.data.frame(predict(curr_model, as.h2o(low_points[c("PPFD", var)])))$predict
+      l_score <- cor(low_points$NEP, predicted_y)^2
+      
+      predicted_y <- as.data.frame(predict(curr_model, as.h2o(high_points[c("PPFD", var)])))$predict
+      h_score <- cor(high_points$NEP, predicted_y)^2
+      
+      rf_R2_all[j] <- reg_score
+      rf_R2_l[j]   <- l_score
+      rf_R2_h[j]   <- h_score
+      
+    }
+    h2o.removeAll()
+    gbm_all_R2[var]  <- gbm_R2_all
+    gbm_low_R2[var]  <- gbm_R2_l
+    gbm_high_R2[var] <- gbm_R2_h
     
-    
-    curr_model <- gbm
-    k <- k + 1
-    
-    predictions <- as.data.frame(predict(curr_model, as.h2o(smear_test[c("PPFD", var)])))$predict
-    
-    reg_score <- cor(smear_test$NEP, predictions)^2
-    
-    predictions <- as.data.frame(predict(curr_model, as.h2o(low_points[c("PPFD", var)])))$predict
+    rf_all_R2[var]  <- rf_R2_all
+    rf_low_R2[var]  <- rf_R2_l
+    rf_high_R2[var] <- rf_R2_h  
 
-    l_score <- cor(low_points$NEP, predictions)^2
-    
-    predictions <- as.data.frame(predict(curr_model, as.h2o(high_points[c("PPFD", var)])))$predict
-    
-    h_score <- cor(high_points$NEP, predictions)^2
-    
-    OOB_RMSE[j] <- reg_score
-    R2[j] <- l_score
-    R2_2[j] <- h_score
   }
-
-  kerroshamppari[var] <- OOB_RMSE
-  low_R2[var] <- R2
-  high_R2[var] <- R2_2
+  scores <- list("gbm_all" = gbm_all_R2, "gbm_low" = gbm_low_R2, "gbm_high" = gbm_high_R2, "rf_all" = rf_all_R2, "rf_low" = rf_low_R2, "rf_high" = rf_high_R2)
+  return(scores)
 }
-plot_for_all()
-plot_for_lowNhigh()
 ```
 
 ```{r}
-print("DONE!")
+# Trying shit out
+
+rf_2008 <- tune_random_forest(smear_2008_2011)
+gbm_2008 <- tune_gbm(smear_2008_2011)
+two_var_2008 <- train_with_two(smear_2008_2011, gbm_2008, rf_2008, 1)
+
+rf_2012 <- tune_random_forest(smear_2012_2019)
+gbm_2012 <- tune_gbm(smear_2012_2019)
+two_var_2012 <- train_with_two(smear_2012_2019, gbm_2012, rf_2012, 1)
+```
+
+```{r, fig.height = 7}
+p1 <- plot_for_lowNhigh(two_var_2008[["gbm_low"]], two_var_2008[["gbm_high"]], "GBM 2008-2011")
+p2 <- plot_for_lowNhigh(two_var_2008[["rf_low"]],  two_var_2008[["rf_high"]],  "RF 2008-2011")
+
+grid.arrange(p1, p2, nrow=2, heights=c(30, 30))
+
+p1 <- plot_for_lowNhigh(two_var_2012[["gbm_low"]], two_var_2012[["gbm_high"]], "GBM 2012-2019")
+p2 <- plot_for_lowNhigh(two_var_2012[["rf_low"]],  two_var_2012[["rf_high"]],  "RF 2012-2019")
+
+grid.arrange(p1, p2, nrow=2, heights=c(30, 30))
+```
+
+```{r}
+frame <- create_hilo_pred_frame(rf_2008, high_points, low_points)
+plot_hi_lo(frame, "RF, Trained With 2008-2011")
+
+frame <- create_hilo_pred_frame(gbm_2008, high_points, low_points)
+plot_hi_lo(frame, "GBM, Trained With 2008-2011")
+
+frame <- create_hilo_pred_frame(rf_2012, high_points, low_points)
+plot_hi_lo(frame, "RF, Trained With 2008-2019")
+
+frame <- create_hilo_pred_frame(gbm_2012, high_points, low_points)
+plot_hi_lo(frame, "GBM, Trained With 2012-2019")
+```
+
+```{r}
+names(sort(colMeans(two_var_2008[["gbm_low"]]), decreasing = TRUE)[1:3])
+names(sort(colMeans(two_var_2008[["gbm_high"]]), decreasing = TRUE)[1:3])
+
+names(sort(colMeans(two_var_2008[["rf_low"]]), decreasing = TRUE)[1:3])
+names(sort(colMeans(two_var_2008[["rf_high"]]), decreasing = TRUE)[1:3])
+
+names(sort(colMeans(two_var_2012[["gbm_low"]]), decreasing = TRUE)[1:3])
+names(sort(colMeans(two_var_2012[["gbm_high"]]), decreasing = TRUE)[1:3])
+
+names(sort(colMeans(two_var_2012[["rf_low"]]), decreasing = TRUE)[1:3])
+names(sort(colMeans(two_var_2012[["rf_high"]]), decreasing = TRUE)[1:3])
+
+
 ```
