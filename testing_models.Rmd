@@ -1,0 +1,95 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(rsample)      # data splitting
+
+smear_2012_2019 <- read.csv(file = "/home/laatopi/Documents/SmearTest/smear2013-19.csv")
+smear_2008_2011 <- read.csv(file = '/home/laatopi/Documents/SmearTest/smear2008-11.csv')
+varrio          <- read.csv(file = "/home/laatopi/Documents/SmearTest/varrio_2015-2019.csv")
+
+varrio <- within(varrio, rm(Time, X, SoilWatCont))
+hyytiala <- within(rbind(smear_2008_2011, smear_2012_2019), rm(Time, X, SoilTempB))
+
+```
+Tuning
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide'}
+library(caret)
+library(gbm)
+library(randomForest)
+library(bst)
+library(Cubist)
+
+process <- function(grid, train_control, method) {
+  
+  split <- initial_split(hyytiala, prop = .7, strata = NEP)
+  train <- training(split)
+  test  <- testing(split)
+
+  caret_grid <- train(NEP ~ .,
+    data = train,
+    method = method,
+    #tuneLength  = 3,
+    trControl = train_control
+    )
+  
+  model_tree_pred <- predict(caret_grid, test)
+  rmse_hyy <- sqrt(mean((model_tree_pred - test$NEP)^2))
+  r2_hyy <- cor(model_tree_pred, test$NEP)^2
+  
+  model_tree_pred <- predict(caret_grid, varrio)
+  rmse_var <- sqrt(mean((model_tree_pred - varrio$NEP)^2))
+  r2_var <- cor(model_tree_pred, varrio$NEP)^2
+  
+  scores <- list("rmse_hyy" = rmse_hyy, "r2_hyy" = r2_hyy, "rmse_var" = rmse_var, "r2_var" = r2_var)
+  return(scores)
+}
+
+test_model <- function(method, grid, train_control, n) {
+  rmse_hyy  <- vector(mode = "numeric", length = n)
+  rmse_var  <- vector(mode = "numeric", length = n)
+  r2_hyy    <- vector(mode = "numeric", length = n)
+  r2_var    <- vector(mode = "numeric", length = n)
+
+
+  for(i in 1:n){
+    scores <- process(grid, train_control, method)
+
+    rmse_hyy[i] <- scores$rmse_hyy
+    rmse_var[i] <- scores$rmse_var
+    r2_hyy[i]   <- scores$r2_hyy
+    r2_var[i]   <- scores$r2_var
+  }
+    
+  return(list("rmse_hyy" = rmse_hyy, "r2_hyy" = r2_hyy, "rmse_var" = rmse_var, "r2_var" = r2_var))
+}
+
+#grid <- expand.grid(committees = seq(1, 100, 5), neighbors =seq(0, 9, 1))
+# search = 'random',
+control <- trainControl(method = "cv", number=10, repeats=3,  verboseIter = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide'}
+grid <- expand.grid(committees = c(1, 10, 25, 50, 75, 100), neighbors = c(0, 1, 5, 9))
+scores_cubist <- test_model("cubist", grid, control, 1)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide'}
+grid <- expand.grid(mtry = seq(1, 9, 1))
+scores_rf <- test_model("rf", grid, control, 1)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide'}
+grid <- expand.grid(n.trees = seq(50, 250, 50), interaction.depth = seq(1, 5, 1), shrinkage=0.1, n.minobsinnode = 10)
+scores_gbm <- test_model("gbm", grid, control, 1)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, results='hide'}
+grid <- expand.grid(mstop = c(40, 90, 150,200), maxdepth = seq(1, 5, 1), nu = seq(0.01, 0.1, length.out = 4))
+scores_bsttree <- test_model("bstTree", grid, control, 1)
+```
+
