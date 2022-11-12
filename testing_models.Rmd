@@ -10,9 +10,9 @@ library(lubridate)
 library(plyr)
 
 
-hyytiala <- read.csv(file = "/home/laatopi/Documents/SmearTest/smear2008-11.csv")
-varrio  <- read.csv(file = "/home/laatopi/Documents/SmearTest/varrio_2015-2019.csv")
-hyytiala_2019 <- read.csv(file = "/home/laatopi/Documents/SmearTest/smear2019-21.csv")
+hyytiala <- read.csv(file = "./smear2008-11.csv")
+varrio  <- read.csv(file = "./varrio_2015-2019.csv")
+hyytiala_2019 <- read.csv(file = "./smear2019-21.csv")
 
 
 varrio <- within(varrio, rm(X, SoilWatCont))
@@ -27,8 +27,8 @@ Tuning
 library(caret)
 library(gbm)
 library(randomForest)
-library(bst)
-library(Cubist)
+library(bst, lib = "/scratch/dongelr1/laantito/")
+library(Cubist, lib = "/scratch/dongelr1/laantito/")
 
 process <- function(grid, train_control, method) {
   
@@ -172,7 +172,9 @@ ggplot(data=data, aes(x=Model, y=Scores, fill=Data)) +
   geom_bar(stat="identity", position=position_dodge()) + ylim(0,1)
 ```
 ```{r}
-library(iml)
+library(iml, lib = "/scratch/dongelr1/laantito/")
+library(Metrics, lib = "/scratch/dongelr1/laantito/")
+library(prediction, lib = "/scratch/dongelr1/laantito/")
 feature_importance <- function(model, y, X) {
   mod <- Predictor$new(model, data = X, y = y)
   imp <- FeatureImp$new(mod, loss = "rmse")
@@ -211,27 +213,36 @@ bst_all    <-  feature_importance(scores_bsttree$model, all_data$NEP, within(all
 library(grid)
 library(gridExtra)
 
-cub_p1 <- plot(cub_hyy) + labs(title="Cub Hyytiala Unseen") + xlim(0, 5)
-cub_p2 <- plot(cub_var) + labs(title="Cub Värriö") + xlim(0, 5)
-cub_p3 <- plot(cub_hyy_n) + labs(title="Cub Hyytiälä 2020-21") + xlim(0, 5)
+# cub_p1 <- plot(cub_hyy) + labs(title="Cub Hyytiala Unseen") + xlim(0, 5)
+# cub_p2 <- plot(cub_var) + labs(title="Cub Värriö") + xlim(0, 5)
+# cub_p3 <- plot(cub_hyy_n) + labs(title="Cub Hyytiälä 2020-21") + xlim(0, 5)
+# 
+# rf_p1 <- plot(rf_hyy) + labs(title="RF Hyytiala Unseen") + xlim(0, 5)
+# rf_p2 <- plot(rf_var) + labs(title="RF Värriö") + xlim(0, 5)
+# rf_p3 <- plot(rf_hyy_n) + labs(title="RF Hyytiälä 2020-21") + xlim(0, 5)
+# 
+# gbm_p1 <- plot(gbm_hyy) + labs(title="GBM Hyytiala Unseen") + xlim(0, 5)
+# gbm_p2 <- plot(gbm_var) + labs(title="GBM Värriö") + xlim(0, 5)
+# gbm_p3 <- plot(gbm_hyy_n) + labs(title="GBM Hyytiälä 2020-21") + xlim(0, 5)
+# 
+# bst_p1 <- plot(bst_hyy) + labs(title="BSTTree Hyytiala Unseen") + xlim(0, 5)
+# bst_p2 <- plot(bst_var) + labs(title="BSTTree Värriö") + xlim(0, 5)
+# bst_p3 <- plot(bst_hyy_n) + labs(title="BSTTree Hyytiälä 2020-21") + xlim(0, 5)
+# 
+# grid.arrange(cub_p1, rf_p1, gbm_p1, bst_p1, nrow=2, ncol=2, heights=c(30, 30))
+# grid.arrange(cub_p2, rf_p2, gbm_p2, bst_p2, nrow=2, ncol=2, heights=c(30, 30))
+# grid.arrange(cub_p3, rf_p3, gbm_p3, gbm_p3, nrow=2, ncol=2, heights=c(30, 30))
 
-rf_p1 <- plot(rf_hyy) + labs(title="RF Hyytiala Unseen") + xlim(0, 5)
-rf_p2 <- plot(rf_var) + labs(title="RF Värriö") + xlim(0, 5)
-rf_p3 <- plot(rf_hyy_n) + labs(title="RF Hyytiälä 2020-21") + xlim(0, 5)
 
-gbm_p1 <- plot(gbm_hyy) + labs(title="GBM Hyytiala Unseen") + xlim(0, 5)
-gbm_p2 <- plot(gbm_var) + labs(title="GBM Värriö") + xlim(0, 5)
-gbm_p3 <- plot(gbm_hyy_n) + labs(title="GBM Hyytiälä 2020-21") + xlim(0, 5)
+cub_all_p <- plot(cub_all) + labs(title="Cubist All") + xlim(0, 5)
+rf_all_p  <- plot(rf_all)  + labs(title="Random Forest All") + xlim(0, 5)
+gbm_all_p <- plot(gbm_all) + labs(title="Gradient Boost Machine All") + xlim(0, 5)
+bst_all_p <- plot(bst_all) + labs(title="BSTTree All") + xlim(0, 5)
 
-bst_p1 <- plot(bst_hyy) + labs(title="BSTTree Hyytiala Unseen") + xlim(0, 5)
-bst_p2 <- plot(bst_var) + labs(title="BSTTree Värriö") + xlim(0, 5)
-bst_p3 <- plot(bst_hyy_n) + labs(title="BSTTree Hyytiälä 2020-21") + xlim(0, 5)
-
-grid.arrange(cub_p1, rf_p1, gbm_p1, bst_p1, nrow=2, ncol=2, heights=c(30, 30))
-grid.arrange(cub_p2, rf_p2, gbm_p2, bst_p2, nrow=2, ncol=2, heights=c(30, 30))
-grid.arrange(cub_p3, rf_p3, gbm_p3, gbm_p3, nrow=2, ncol=2, heights=c(30, 30))
+grid.arrange(cub_all_p, rf_all_p, gbm_all_p, bst_all_p, nrow=2, ncol=2, heights=c(30, 30))
 
 ```
+
 ```{r}
 plot_hi_lo <- function(df2, title_text) {
 
