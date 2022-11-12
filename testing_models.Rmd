@@ -1,4 +1,4 @@
----
+<!-- # --- -->
 title: "R Notebook"
 output: html_notebook
 ---
@@ -6,14 +6,20 @@ output: html_notebook
 
 ```{r}
 library(rsample)      # data splitting
+library(lubridate)
+library(plyr)
 
-smear_2012_2019 <- read.csv(file = "/home/laatopi/Documents/SmearTest/smear2013-19.csv")
-smear_2008_2011 <- read.csv(file = '/home/laatopi/Documents/SmearTest/smear2008-11.csv')
-varrio          <- read.csv(file = "/home/laatopi/Documents/SmearTest/varrio_2015-2019.csv")
 
-varrio <- within(varrio, rm(Time, X, SoilWatCont))
-hyytiala <- within(rbind(smear_2008_2011, smear_2012_2019), rm(Time, X, SoilTempB))
+hyytiala <- read.csv(file = "/home/laatopi/Documents/SmearTest/smear2008-11.csv")
+varrio  <- read.csv(file = "/home/laatopi/Documents/SmearTest/varrio_2015-2019.csv")
+hyytiala_2019 <- read.csv(file = "/home/laatopi/Documents/SmearTest/smear2019-21.csv")
 
+
+varrio <- within(varrio, rm(X, SoilWatCont))
+hyytiala <- within(hyytiala, rm(X, SoilTempB))
+hyytiala_2019 <- within(hyytiala_2019, rm(X, SoilTempB))
+
+all_data <- rbind(varrio, hyytiala, hyytiala_2019)
 ```
 Tuning
 
@@ -31,46 +37,87 @@ process <- function(grid, train_control, method) {
   test  <- testing(split)
 
   caret_grid <- train(NEP ~ .,
-    data = train,
+    data = within(train, rm(Time)),
     method = method,
     #tuneLength  = 3,
     trControl = train_control
     )
   
-  model_tree_pred <- predict(caret_grid, test)
-  rmse_hyy <- sqrt(mean((model_tree_pred - test$NEP)^2))
-  r2_hyy <- cor(model_tree_pred, test$NEP)^2
+  model_tree_pred_1 <- predict(caret_grid, test)
+  rmse_hyy <- sqrt(mean((test$NEP - model_tree_pred_1)^2))
+  r2_hyy <- cor(test$NEP, model_tree_pred_1)^2
   
-  model_tree_pred <- predict(caret_grid, varrio)
-  rmse_var <- sqrt(mean((model_tree_pred - varrio$NEP)^2))
-  r2_var <- cor(model_tree_pred, varrio$NEP)^2
+  model_tree_pred_2 <- predict(caret_grid, varrio)
+  rmse_var <- sqrt(mean((varrio$NEP - model_tree_pred_2)^2))
+  r2_var <- cor(varrio$NEP, model_tree_pred_2)^2
   
-  scores <- list("rmse_hyy" = rmse_hyy, "r2_hyy" = r2_hyy, "rmse_var" = rmse_var, "r2_var" = r2_var)
+  model_tree_pred_3 <- predict(caret_grid, hyytiala_2019)
+  rmse_hyy_n <- sqrt(mean((hyytiala_2019$NEP - model_tree_pred_3)^2))
+  r2_hyy_n <- cor(hyytiala_2019$NEP, model_tree_pred_3)^2
+
+  ###
+
+  df1 <- data.frame(number = model_tree_pred_1, time = hour(test$Time))
+  df2 <- data.frame(number = model_tree_pred_2, time = hour(varrio$Time))
+  df3 <- data.frame(number = model_tree_pred_3, time = hour(hyytiala_2019$Time))
+  
+  df1$group <- 'Hyytiälä Unseen Prediction'
+  df2$group <- 'Värriö Prediction'
+  df3$group <- 'Hyytiälä 2020-2021- Prediction'
+
+  
+  df4 <- data.frame(number = test$NEP, time = hour(test$Time))
+  df5 <- data.frame(number = varrio$NEP, time = hour(varrio$Time))
+  df6 <- data.frame(number = hyytiala_2019$NEP, time = hour(hyytiala_2019$Time))
+  
+  df4$group <- 'Hyytiälä Unseen Actual'
+  df5$group <- 'Värriö Actual'
+  df6$group <- 'Hyytiälä 2020-2021 Actual'
+
+  df7 <- rbind(df1, df2, df3, df4, df5, df6)
+  
+  varname <- "number"
+  groupnames <- c("time", "group")
+  
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  
+  ###
+  
+  data_sum <- ddply(df7, groupnames, .fun=summary_func, varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  scores <- list("rmse_hyy" = rmse_hyy, "r2_hyy" = r2_hyy, "rmse_var" = rmse_var, "r2_var" = r2_var, "rmse_hyy_n" = rmse_hyy_n, "r2_hyy_n" = r2_hyy_n, "model" = caret_grid, "timeframe" =  data_sum)
+  
   return(scores)
 }
 
 test_model <- function(method, grid, train_control, n) {
   rmse_hyy  <- vector(mode = "numeric", length = n)
   rmse_var  <- vector(mode = "numeric", length = n)
+  rmse_hyy_n <- vector(mode = "numeric", length = n)
   r2_hyy    <- vector(mode = "numeric", length = n)
   r2_var    <- vector(mode = "numeric", length = n)
-
-
+  r2_hyy_n  <- vector(mode = "numeric", length = n)
+  
   for(i in 1:n){
     scores <- process(grid, train_control, method)
 
     rmse_hyy[i] <- scores$rmse_hyy
     rmse_var[i] <- scores$rmse_var
+    rmse_hyy_n[i] <- scores$rmse_hyy_n
     r2_hyy[i]   <- scores$r2_hyy
     r2_var[i]   <- scores$r2_var
+    r2_hyy_n[i] <- scores$r2_hyy_n
   }
     
-  return(list("rmse_hyy" = rmse_hyy, "r2_hyy" = r2_hyy, "rmse_var" = rmse_var, "r2_var" = r2_var))
+  return(list("rmse_hyy" = rmse_hyy, "r2_hyy" = r2_hyy, "rmse_var" = rmse_var, "r2_var" = r2_var, "rmse_hyy_n" = rmse_hyy_n, "r2_hyy_n" = r2_hyy_n, "model" = scores$model, "timeframe" = scores$timeframe))
 }
 
 #grid <- expand.grid(committees = seq(1, 100, 5), neighbors =seq(0, 9, 1))
 # search = 'random',
-control <- trainControl(method = "cv", number=10, repeats=3,  verboseIter = TRUE)
+control <- trainControl(method = "cv", number=3, repeats=3,  verboseIter = TRUE)
 ```
 
 ```{r message=FALSE, warning=FALSE, include=FALSE, results='hide'}
@@ -93,3 +140,203 @@ grid <- expand.grid(mstop = c(40, 90, 150,200), maxdepth = seq(1, 5, 1), nu = se
 scores_bsttree <- test_model("bstTree", grid, control, 1)
 ```
 
+```{r}
+library(ggplot2)
+data_cubist <- data.frame(
+  Model=rep("Cubist", 3),
+  Data=c("Hyytiälä Unseen", "Värriö", "Hyytiälä 2020-2021"),
+  Scores=c(scores_cubist$r2_hyy, scores_cubist$r2_var, scores_cubist$r2_hyy_n)
+)
+
+data_rf <- data.frame(
+  Model=rep("Random Forest", 3),
+  Data=c("Hyytiälä Unseen", "Värriö", "Hyytiälä 2020-2021"),
+  Scores=c(scores_rf$r2_hyy, scores_rf$r2_var, scores_rf$r2_hyy_n)
+)
+
+data_gbm <- data.frame(
+  Model=rep("GBM", 3),
+  Data=c("Hyytiälä Unseen", "Värriö", "Hyytiälä 2020-2021"),
+  Scores=c(scores_gbm$r2_hyy, scores_gbm$r2_var, scores_gbm$r2_hyy_n)
+)
+
+data_bst <- data.frame(
+  Model=rep("BST Tree", 3),
+  Data=c("Hyytiälä Unseen", "Värriö", "Hyytiälä 2020-2021"),
+  Scores=c(scores_bsttree$r2_hyy, scores_bsttree$r2_var, scores_bsttree$r2_hyy_n)
+)
+
+data <- rbind(data_cubist, data_rf, data_gbm, data_bst)
+
+ggplot(data=data, aes(x=Model, y=Scores, fill=Data)) +
+  geom_bar(stat="identity", position=position_dodge()) + ylim(0,1)
+```
+```{r}
+library(iml)
+feature_importance <- function(model, y, X) {
+  mod <- Predictor$new(model, data = X, y = y)
+  imp <- FeatureImp$new(mod, loss = "rmse")
+  return(imp)
+}
+
+# fi_rf_varrio <- feature_importance(rf_varrio, varrio$NEP, within(varrio, rm("NEP", X, Time)))
+# fi_gbm_varrio <- feature_importance(gbm_varrio, varrio$NEP, within(varrio, rm("NEP", X, Time)))
+# fi_rf_hyy <- feature_importance(rf_hyy, smear_2012_2019$NEP, within(smear_2012_2019, rm("NEP", X, Time)))
+# fi_gbm_hyy <- feature_importance(gbm_hyy, smear_2012_2019$NEP, within(smear_2012_2019, rm("NEP", X, Time)))
+
+# cub_hyy   <- feature_importance(scores_cubist$model, hyytiala$NEP, within(hyytiala, rm("NEP")))
+# cub_var   <- feature_importance(scores_cubist$model, varrio$NEP, within(varrio, rm("NEP")))
+# cub_hyy_n <- feature_importance(scores_cubist$model, hyytiala_2019$NEP, within(hyytiala_2019, rm("NEP")))
+# 
+# rf_hyy   <- feature_importance(scores_rf$model, hyytiala$NEP, within(hyytiala, rm("NEP")))
+# rf_var   <- feature_importance(scores_rf$model, varrio$NEP, within(varrio, rm("NEP")))
+# rf_hyy_n <- feature_importance(scores_rf$model, hyytiala_2019$NEP, within(hyytiala_2019, rm("NEP")))
+# 
+# gbm_hyy   <- feature_importance(scores_gbm$model, hyytiala$NEP, within(hyytiala, rm("NEP")))
+# gbm_var   <- feature_importance(scores_gbm$model, varrio$NEP, within(varrio, rm("NEP")))
+# gbm_hyy_n <- feature_importance(scores_gbm$model, hyytiala_2019$NEP, within(hyytiala_2019, rm("NEP")))
+# 
+# bst_hyy   <- feature_importance(scores_bsttree$model, hyytiala$NEP, within(hyytiala, rm("NEP")))
+# bst_var   <- feature_importance(scores_bsttree$model, varrio$NEP, within(varrio, rm("NEP")))
+# bst_hyy_n <- feature_importance(scores_bsttree$model, hyytiala_2019$NEP, within(hyytiala_2019, rm("NEP")))
+
+cub_all    <-  feature_importance(scores_cubist$model, all_data$NEP, within(all_data, rm("NEP", "Time")))
+rf_all     <-  feature_importance(scores_rf$model, all_data$NEP, within(all_data, rm("NEP", "Time")))
+gbm_all    <-  feature_importance(scores_gbm$model, all_data$NEP, within(all_data, rm("NEP", "Time")))
+bst_all    <-  feature_importance(scores_bsttree$model, all_data$NEP, within(all_data, rm("NEP", "Time")))
+
+```
+
+```{r}
+library(grid)
+library(gridExtra)
+
+cub_p1 <- plot(cub_hyy) + labs(title="Cub Hyytiala Unseen") + xlim(0, 5)
+cub_p2 <- plot(cub_var) + labs(title="Cub Värriö") + xlim(0, 5)
+cub_p3 <- plot(cub_hyy_n) + labs(title="Cub Hyytiälä 2020-21") + xlim(0, 5)
+
+rf_p1 <- plot(rf_hyy) + labs(title="RF Hyytiala Unseen") + xlim(0, 5)
+rf_p2 <- plot(rf_var) + labs(title="RF Värriö") + xlim(0, 5)
+rf_p3 <- plot(rf_hyy_n) + labs(title="RF Hyytiälä 2020-21") + xlim(0, 5)
+
+gbm_p1 <- plot(gbm_hyy) + labs(title="GBM Hyytiala Unseen") + xlim(0, 5)
+gbm_p2 <- plot(gbm_var) + labs(title="GBM Värriö") + xlim(0, 5)
+gbm_p3 <- plot(gbm_hyy_n) + labs(title="GBM Hyytiälä 2020-21") + xlim(0, 5)
+
+bst_p1 <- plot(bst_hyy) + labs(title="BSTTree Hyytiala Unseen") + xlim(0, 5)
+bst_p2 <- plot(bst_var) + labs(title="BSTTree Värriö") + xlim(0, 5)
+bst_p3 <- plot(bst_hyy_n) + labs(title="BSTTree Hyytiälä 2020-21") + xlim(0, 5)
+
+grid.arrange(cub_p1, rf_p1, gbm_p1, bst_p1, nrow=2, ncol=2, heights=c(30, 30))
+grid.arrange(cub_p2, rf_p2, gbm_p2, bst_p2, nrow=2, ncol=2, heights=c(30, 30))
+grid.arrange(cub_p3, rf_p3, gbm_p3, gbm_p3, nrow=2, ncol=2, heights=c(30, 30))
+
+```
+```{r}
+plot_hi_lo <- function(df2, title_text) {
+
+  p <- ggplot(df2, aes(x=as.factor(time), y=number, group=group, color=group)) + 
+    geom_line(position = position_dodge(0.5)) +
+    geom_point(position = position_dodge(0.5))#+
+    #geom_errorbar(aes(ymin=number-sd, ymax=number+sd), width=.2,
+    #              position=position_dodge(2.5))
+  
+  p <- p + labs(title = title_text, x = "Hour" , y = "NEE", color="Type")+
+     theme_classic() +
+     scale_color_manual(values=c('#CB4335','#f06292', '#2471a3', '#33D1FF', '#1e8449', '#82e0aa')) +
+     scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+     theme(panel.grid.major.y = element_line(color = "gray",
+                                          size = 0.5,
+                                          linetype = 2)) +
+     ylim(-13, 7)
+  return(p)
+}
+
+g1 <- plot_hi_lo(scores_cubist$timeframe, "Cubist")
+g2 <- plot_hi_lo(scores_rf$timeframe, "Random Forest")
+g3 <- plot_hi_lo(scores_gbm$timeframe, "Gradient Boost Machine")
+g4 <- plot_hi_lo(scores_bsttree$timeframe, "BSTTree")
+
+g <- grid.arrange(g1, g2, g3, g4, nrow=2, ncol=2, heights=c(50, 50))
+
+
+pdf("nee_plots.pdf", width = 20, height = 12) # Open a new pdf file
+grid.arrange(g1, g2, g3, g4, nrow=2, ncol=2)
+dev.off()
+```
+
+```{r}
+process <- function(grid, train_control, method) {
+  
+  set.seed(1353)
+  
+  split <- initial_split(hyytiala, prop = .8, strata = NEP)
+  train_hyy <- training(split)
+  test_hyy  <- testing(split)
+  
+  split <- initial_split(varrio, prop = .8, strata = NEP)
+  train_var <- training(split)
+  test_var  <- testing(split)
+  
+  split <- initial_split(hyytiala_2019, prop = .8, strata = NEP)
+  train_hyy_n <- training(split)
+  test_hyy_n  <- testing(split)
+  
+  train <- rbind(train_hyy, train_var, train_hyy_n)
+
+  caret_grid <- train(NEP ~ .,
+    data = within(train, rm(Time)),
+    method = method,
+    #tuneLength  = 3,
+    trControl = train_control
+    )
+  
+  model_tree_pred_1 <- predict(caret_grid, test_hyy)
+  rmse_hyy <- sqrt(mean((test_hyy$NEP - model_tree_pred_1)^2))
+  r2_hyy   <- cor(test_hyy$NEP, model_tree_pred_1)^2
+  
+  model_tree_pred_2 <- predict(caret_grid, test_var)
+  rmse_var <- sqrt(mean((test_var$NEP - model_tree_pred_2)^2))
+  r2_var   <- cor(test_var$NEP, model_tree_pred_2)^2
+  
+  model_tree_pred_3 <- predict(caret_grid, test_hyy_n)
+  rmse_hyy_n <- sqrt(mean((test_hyy_n$NEP - model_tree_pred_3)^2))
+  r2_hyy_n   <- cor(test_hyy_n$NEP, model_tree_pred_3)^2
+
+  ###
+
+  df1 <- data.frame(number = model_tree_pred_1, time = hour(test_hyy$Time))
+  df2 <- data.frame(number = model_tree_pred_2, time = hour(test_var$Time))
+  df3 <- data.frame(number = model_tree_pred_3, time = hour(test_hyy_n$Time))
+
+  df1$group <- 'Hyytiälä Unseen Prediction'
+  df2$group <- 'Värriö Unseen Prediction'
+  df3$group <- 'Hyytiälä Unseen 2020-2021- Prediction'
+  
+  df4 <- data.frame(number = test_hyy$NEP, time = hour(test_hyy$Time))
+  df5 <- data.frame(number = test_var$NEP, time = hour(test_var$Time))
+  df6 <- data.frame(number = test_hyy_n$NEP, time = hour(test_hyy_n$Time))
+
+  df4$group <- 'Hyytiälä Unseen Actual'
+  df5$group <- 'Värriö Unseen Actual'
+  df6$group <- 'Hyytiälä Unseen 2020-2021 Actual'
+
+  df7 <- rbind(df1, df2, df3, df4, df5, df6)
+  
+  varname <- "number"
+  groupnames <- c("time", "group")
+  
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  
+  ###
+  
+  data_sum <- ddply(df7, groupnames, .fun=summary_func, varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+  scores <- list("rmse_hyy" = rmse_hyy, "r2_hyy" = r2_hyy, "rmse_var" = rmse_var, "r2_var" = r2_var, "rmse_hyy_n" = rmse_hyy_n, "r2_hyy_n" = r2_hyy_n, "model" = caret_grid, "timeframe" =  data_sum)
+  
+  return(scores)
+}
+```
