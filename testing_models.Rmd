@@ -8,6 +8,13 @@ output: html_notebook
 library(rsample)      # data splitting
 library(lubridate)
 library(plyr)
+library(grid)
+library(gridExtra)
+library(caret)
+library(gbm)
+library(randomForest)
+library(bst, lib = "/scratch/dongelr1/laantito/")
+library(Cubist, lib = "/scratch/dongelr1/laantito/")
 
 
 hyytiala <- read.csv(file = "./smear2008-11.csv")
@@ -20,18 +27,16 @@ hyytiala <- within(hyytiala, rm(X, SoilTempB))
 hyytiala_2019 <- within(hyytiala_2019, rm(X, SoilTempB))
 
 all_data <- rbind(varrio, hyytiala, hyytiala_2019)
+
+set.seed(1353)
 ```
 Tuning
 
 ```{r message=FALSE, warning=FALSE, include=FALSE, results='hide'}
-library(caret)
-library(gbm)
-library(randomForest)
-library(bst, lib = "/scratch/dongelr1/laantito/")
-library(Cubist, lib = "/scratch/dongelr1/laantito/")
 
 process <- function(grid, train_control, method) {
   
+  set.seed(1353)
   split <- initial_split(hyytiala, prop = .7, strata = NEP)
   train <- training(split)
   test  <- testing(split)
@@ -61,18 +66,18 @@ process <- function(grid, train_control, method) {
   df2 <- data.frame(number = model_tree_pred_2, time = hour(varrio$Time))
   df3 <- data.frame(number = model_tree_pred_3, time = hour(hyytiala_2019$Time))
   
-  df1$group <- 'Hyytiälä Unseen Prediction'
-  df2$group <- 'Värriö Prediction'
-  df3$group <- 'Hyytiälä 2020-2021- Prediction'
+  df1$group <- 'Hyytiala Unseen Prediction'
+  df2$group <- 'Varrio Prediction'
+  df3$group <- 'Hyytiala 2020-2021 Prediction'
 
   
   df4 <- data.frame(number = test$NEP, time = hour(test$Time))
   df5 <- data.frame(number = varrio$NEP, time = hour(varrio$Time))
   df6 <- data.frame(number = hyytiala_2019$NEP, time = hour(hyytiala_2019$Time))
   
-  df4$group <- 'Hyytiälä Unseen Actual'
-  df5$group <- 'Värriö Actual'
-  df6$group <- 'Hyytiälä 2020-2021 Actual'
+  df4$group <- 'Hyytiala Unseen Actual'
+  df5$group <- 'Varrio Actual'
+  df6$group <- 'Hyytiala 2020-2021 Actual'
 
   df7 <- rbind(df1, df2, df3, df4, df5, df6)
   
@@ -210,8 +215,7 @@ bst_all    <-  feature_importance(scores_bsttree$model, all_data$NEP, within(all
 ```
 
 ```{r}
-library(grid)
-library(gridExtra)
+
 
 # cub_p1 <- plot(cub_hyy) + labs(title="Cub Hyytiala Unseen") + xlim(0, 5)
 # cub_p2 <- plot(cub_var) + labs(title="Cub Värriö") + xlim(0, 5)
@@ -246,9 +250,9 @@ grid.arrange(cub_all_p, rf_all_p, gbm_all_p, bst_all_p, nrow=2, ncol=2, heights=
 ```{r}
 plot_hi_lo <- function(df2, title_text) {
 
-  p <- ggplot(df2, aes(x=as.factor(time), y=number, group=group, color=group)) + 
+  p <- ggplot(df2, aes(x=as.factor(time), y=number, group=group, color=group, shape=group)) + 
     geom_line(position = position_dodge(0.5)) +
-    geom_point(position = position_dodge(0.5))#+
+    geom_point(position = position_dodge(0.5), size=3)#+
     #geom_errorbar(aes(ymin=number-sd, ymax=number+sd), width=.2,
     #              position=position_dodge(2.5))
   
@@ -259,7 +263,9 @@ plot_hi_lo <- function(df2, title_text) {
      theme(panel.grid.major.y = element_line(color = "gray",
                                           size = 0.5,
                                           linetype = 2)) +
-     ylim(-13, 7)
+     ylim(-13, 7) + 
+     scale_shape_manual(values=c(0,16,0,16,0,16), guide = "none") +
+    guides(color = guide_legend(override.aes=list(shape = c(0,16,0,16,0,16))))
   return(p)
 }
 
@@ -271,7 +277,7 @@ g4 <- plot_hi_lo(scores_bsttree$timeframe, "BSTTree")
 g <- grid.arrange(g1, g2, g3, g4, nrow=2, ncol=2, heights=c(50, 50))
 
 
-pdf("nee_plots.pdf", width = 20, height = 12) # Open a new pdf file
+png("nee_plots.png", width = 1600, height = 800) # Open a new pdf file
 grid.arrange(g1, g2, g3, g4, nrow=2, ncol=2)
 dev.off()
 ```
@@ -280,15 +286,16 @@ dev.off()
 process <- function(grid, train_control, method) {
   
   set.seed(1353)
-  
   split <- initial_split(hyytiala, prop = .8, strata = NEP)
   train_hyy <- training(split)
   test_hyy  <- testing(split)
   
+  set.seed(1353)
   split <- initial_split(varrio, prop = .8, strata = NEP)
   train_var <- training(split)
   test_var  <- testing(split)
   
+  set.seed(1353)
   split <- initial_split(hyytiala_2019, prop = .8, strata = NEP)
   train_hyy_n <- training(split)
   test_hyy_n  <- testing(split)
@@ -320,17 +327,17 @@ process <- function(grid, train_control, method) {
   df2 <- data.frame(number = model_tree_pred_2, time = hour(test_var$Time))
   df3 <- data.frame(number = model_tree_pred_3, time = hour(test_hyy_n$Time))
 
-  df1$group <- 'Hyytiälä Unseen Prediction'
-  df2$group <- 'Värriö Unseen Prediction'
-  df3$group <- 'Hyytiälä Unseen 2020-2021- Prediction'
+  df1$group <- 'Hyytiala Unseen Prediction'
+  df2$group <- 'Varrio Unseen Prediction'
+  df3$group <- 'Hyytiala Unseen 2020-2021 Prediction'
   
   df4 <- data.frame(number = test_hyy$NEP, time = hour(test_hyy$Time))
   df5 <- data.frame(number = test_var$NEP, time = hour(test_var$Time))
   df6 <- data.frame(number = test_hyy_n$NEP, time = hour(test_hyy_n$Time))
 
-  df4$group <- 'Hyytiälä Unseen Actual'
-  df5$group <- 'Värriö Unseen Actual'
-  df6$group <- 'Hyytiälä Unseen 2020-2021 Actual'
+  df4$group <- 'Hyytiala Unseen Actual'
+  df5$group <- 'Varrio Unseen Actual'
+  df6$group <- 'Hyytiala Unseen 2020-2021 Actual'
 
   df7 <- rbind(df1, df2, df3, df4, df5, df6)
   
@@ -351,3 +358,87 @@ process <- function(grid, train_control, method) {
   return(scores)
 }
 ```
+
+```{r}
+mod <- Predictor$new(scores_cubist$model, data = within(all_data, rm(Time)))
+eff <- FeatureEffects$new(mod)
+eff$plot()
+## Not run
+```
+```{r}
+plot_hi_lo <- function(df2, title_text, color) {
+
+  p <- ggplot(df2, aes(x=as.factor(time), y=number, group=group, color=group, shape=group)) + 
+    geom_line(position = position_dodge(0.5)) +
+    geom_point(position = position_dodge(0.5), size=3)+
+    geom_errorbar(aes(ymin=number-sd, ymax=number+sd), width=.2,
+                  position=position_dodge(0.5))
+  
+  p <- p + labs(title = title_text, x = "Hour" , y = "NEE", color="Type")+
+     theme_classic() +
+     scale_color_manual(values=color) +
+     scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+     theme(panel.grid.major.y = element_line(color = "gray",
+                                          size = 0.5,
+                                          linetype = 2)) +
+     ylim(-20, 7) + 
+     scale_shape_manual(values=c(0,16,0,16,0,16), guide = "none") +
+    guides(color = guide_legend(override.aes=list(shape = c(0,16))))
+  return(p)
+}
+
+colors <- c('#CB4335','#f06292', '#2471a3', '#33D1FF', '#1e8449', '#82e0aa')
+cubist_data <- scores_cubist$timeframe
+
+cubist_hyyt <- cubist_data[cubist_data$group == "Hyytiala Unseen Actual" | cubist_data$group == "Hyytiala Unseen Prediction", ]
+cubist_varr <- cubist_data[cubist_data$group == "Varrio Actual" | cubist_data$group == "Varrio Prediction", ]
+cubist_hyyt_2 <- cubist_data[cubist_data$group == 'Hyytiala 2020-2021 Prediction' | cubist_data$group == 'Hyytiala 2020-2021 Actual', ]
+
+plot_hi_lo(cubist_hyyt, "Hyytiala", colors[1:2])
+plot_hi_lo(cubist_varr, "Varrio", colors[3:4])
+plot_hi_lo(cubist_hyyt_2, "Hyytiala 2020+", colors[5:6])
+
+
+```
+```{r}
+
+colors <- c('#CB4335','#f06292', '#2471a3', '#33D1FF', '#1e8449', '#82e0aa')
+cubist_data <- scores_cubist$timeframe
+
+cubist_hyyt <- cubist_data[cubist_data$group == "Hyytiala Unseen Actual" | cubist_data$group == "Hyytiala Unseen Prediction", ]
+cubist_varr <- cubist_data[cubist_data$group == "Varrio Unseen Actual" | cubist_data$group == "Varrio Unseen Prediction", ]
+cubist_hyyt_2 <- cubist_data[cubist_data$group == 'Hyytiala Unseen 2020-2021 Prediction' | cubist_data$group == 'Hyytiala Unseen 2020-2021 Actual', ]
+
+plot_hi_lo(cubist_hyyt, "Hyytiala", colors[1:2])
+plot_hi_lo(cubist_varr, "Varrio", colors[3:4])
+plot_hi_lo(cubist_hyyt_2, "Hyytiala 2020+", colors[5:6])
+```
+```{r fig.width=5, fig.height=5}
+set.seed(1353)
+split <- initial_split(hyytiala, prop = .8, strata = NEP)
+test_hyy  <- testing(split)
+
+set.seed(1353)
+split <- initial_split(varrio, prop = .8, strata = NEP)
+test_var  <- testing(split)
+
+set.seed(1353)
+split <- initial_split(hyytiala_2019, prop = .8, strata = NEP)
+test_hyy_n  <- testing(split)
+
+model_tree_pred_1 <- predict(scores_cubist$model, test_hyy)
+model_tree_pred_2 <- predict(scores_cubist$model, test_var)
+model_tree_pred_3 <- predict(scores_cubist$model, test_hyy_n)
+
+df1 <- data.frame(predicted = model_tree_pred_1, actual = test_hyy$NEP)
+df2 <- data.frame(predicted = model_tree_pred_2, actual = test_var$NEP)
+df3 <- data.frame(predicted = model_tree_pred_3, actual = test_hyy_n$NEP)
+
+ggplot(df1, aes(x=predicted, y=actual)) +
+  geom_point(size=0.5, color="Red", alpha = 0.5) + labs(title = "Hyytiala")  + xlim(-30, 15) + ylim(-30, 15) + labs(title = "Hyytiala")
+ggplot(df2, aes(x=predicted, y=actual)) +
+  geom_point(size=0.5, color="Blue", alpha = 0.5) + labs(title = "Varrio") + xlim(-30, 15) + ylim(-30, 15) + labs(title = "Varrio")
+ggplot(df3, aes(x=predicted, y=actual)) +
+  geom_point(size=0.5, color="DarkGreen", alpha = 0.5) + labs(title = "Hyytiala +2020") + xlim(-30, 15) + ylim(-30, 15)
+```
+
