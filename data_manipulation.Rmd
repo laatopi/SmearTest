@@ -63,7 +63,7 @@ e_s <- 611 * exp( (17.27 * x["AirTemp"]) / (237.3 + x["AirTemp"]) )
 e_a <- e_s * (x["RelHum"]/100)
 x["VaporPressureDeficit"] = e_s - e_a
 
-write.csv(x, "/home/laatopi/Documents/SmearTest/smear2008-11.csv")
+write.csv(x, "/home/laatopi/Documents/SmearTest/smear2008-18.csv")
 ```
 
 Smear 1
