@@ -17,9 +17,9 @@ library(bst, lib = "/scratch/dongelr1/laantito/")
 library(Cubist, lib = "/scratch/dongelr1/laantito/")
 
 
-hyytiala <- read.csv(file = "./smear2008-11.csv")
+hyytiala <- read.csv(file = "./smear2008-18.csv")
 varrio  <- read.csv(file = "./varrio_2015-2019.csv")
-hyytiala_2019 <- read.csv(file = "./smear2019-21.csv")
+hyytiala_2019 <- read.csv(file = "./smear2020-21.csv")
 
 
 varrio <- within(varrio, rm(X, SoilWatCont))
